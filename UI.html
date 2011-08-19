@@ -1,0 +1,138 @@
+<html>
+<head>
+<style type="text/css">
+div.out
+  { float: left
+  ; margin: 1em
+  ; padding: 1em
+  }
+
+div.out2
+  { padding: 0
+  }
+
+a.close
+  { font-family: sans-serif
+  ; font-size: smaller
+  ; font-style: italic
+  ; text-decoration: none
+  ; color: #cccccc
+  }
+
+div.out ol
+  { margin: 0
+  ; padding: 0
+  }
+
+div.out input
+  { border: none
+  ; font-style: italic
+  ; color: black
+  }
+
+.err
+  { background-color: red
+  }
+</style>
+
+<script>
+var next = 0;
+
+function populate_list(name, vals) {
+  var gl = document.getElementById("inertGiven");
+  var wl = document.getElementById("inertWanted");
+
+  while(gl.firstChild) gl.removeChild(gl.firstChild);
+  while(wl.firstChild) wl.removeChild(wl.firstChild);
+
+  for (var i in vals) {
+    var n = document.createElement("li");
+    n.innerHTML= vals[i][1];
+    var l = (vals[i][0] == "Wanted") ? wl : gl;
+    l.insertBefore(n,l.lastChild);
+  }
+}
+
+function add(evt, name) {
+  if (evt.keyCode != 13) return true;
+  var inp = evt.srcElement;
+
+  if (!sendMessage("add", name, next + "&" + name + "&" + inp.value)) {
+    inp.setAttribute("class","err");
+    return false;
+  }
+
+  var l = document.getElementById(name);
+  var n = document.createElement("li");
+  n.id = "p" + next;
+  n.innerHTML= "<a href='' class='close' onclick='return rm(\"" + name + "\"," + next + ")'>remove</a> " + inp.value;
+  ++next;
+  l.insertBefore(n,l.lastChild);
+  inp.setAttribute("class","");
+  inp.value = "";
+  return false;
+}
+
+function rm(name, n) {
+  var l = document.getElementById(name);
+  var c = document.getElementById("p" + n);
+  if (sendMessage("rm", name, n)) l.removeChild(c);
+  return false;
+}
+
+function sendMessage(op,ty,val) {
+  var ok = false;
+  req = new XMLHttpRequest();
+  req.onreadystatechange=function() {
+    if (req.readyState==4) {
+      if (req.status==200) {
+        populate_list("inert" + ty, JSON.parse(req.responseText));
+        ok = true;
+      }
+    }
+  }
+  req.open("GET", "http://localhost:8000/" + op + "?" + val, false);
+  req.send();
+  return ok;
+}
+</script>
+</head>
+<body>
+<div class="out">
+Entered:
+<div>
+<div class="out">
+Given:
+<ol id="Given">
+<li><input type="text"
+           placeholder="add new"
+           onkeypress="return add(event, 'Given')"
+    /></li></ol>
+</div>
+<div class="out">
+Wanted:
+<ol id="Wanted">
+<li><input type="text"
+           placeholder="add new"
+           onkeypress="return add(event, 'Wanted')"
+    /></li></ol>
+</div>
+</div>
+</div>
+
+<div class="out">
+Inert Set:
+<div>
+<div class="out">
+Given:
+<ol id="inertGiven"></ol>
+</div>
+<div class="out">
+Wanted:
+<ol id="inertWanted"></ol>
+</div>
+</div>
+</div>
+
+</body>
+</html>
