@@ -132,28 +132,37 @@ equivalent to the original goal (under the given assumptions) and also
 
 \subsection{The Inert Set}
 
+The {\em inert set} is a collection of propositions, which keeps track
+of the facts that are known by the solver, as well as any goals that
+were attempted but not solved.  We refer to this set as ``inert'' because
+the propositions in it cannot ``interact'' with each other.  To distinguish
+sets with this property from other sets of propositions we use a separate
+type synonym:
+
 \begin{code}
 type InertSet = PropSet
 \end{code}
 
-The {\em inert set} keeps track of the facts known by the solver
-and the goals that we tried to solve but failed.
-
-The purpose of the solver is to compute a ``minimal'' inert ste
-
-
-
-
-This data-structure satisfies the invariant that the stored propositions
-cannot ``interact''.  Like this:
+More formally, the following predicate captures the ``non-interacion''
+invariant of the inert set:
 
 \begin{code}
 inert_prop :: InertSet -> Bool
 inert_prop props = all (isNotForAll . uncurry entails) $
-  [ (ws ++ given props, w) | (w,ws) <- choose (wanted props) ] ++
-  [ (gs, g)                | (g,gs) <- choose (given props)  ]
+  [ (gs, g)                | (g,gs) <- choose (given props)  ] ++
+  [ (ws ++ given props, w) | (w,ws) <- choose (wanted props) ]
 \end{code}
 
+The predicate consists of two parts, both of the same form:  the first one
+asserts that the collection of given facts is consistent and non-redundant,
+while the second asserts that the collection of goals is consistent and
+non-redundant.
+
+\begin{code}
+choose :: [a] -> [(a,[a])]
+choose []     = []
+choose (x:xs) = (x,xs) : [ (y, x:ys) | (y,ys) <- choose xs ]
+\end{code}
 
 
 
@@ -501,10 +510,6 @@ instance Show PropSet where
             unlines [ "G: " ++ show p | p <- given is ] ++
             unlines [ "W: " ++ show p | p <- wanted is ]
 
-
-choose :: [a] -> [(a,[a])]
-choose []     = []
-choose (x:xs) = (x,xs) : [ (y, x:ys) | (y,ys) <- choose xs ]
 
 nth_product :: Int -> [a] -> [[a]]
 nth_product n xs | n <= 1     = do x <- xs
