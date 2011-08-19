@@ -3,8 +3,6 @@
 module Test where
 
 import Data.Maybe(catMaybes)
-import Data.Char(isSpace)
-import Debug.Trace
 
 type Xi = String
 

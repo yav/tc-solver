@@ -36,20 +36,12 @@ This data-structure satisfies the invariant that the stored propositions
 cannot ``interact''.  Like this:
 
 \begin{code}
+inert_prop :: InertSet -> Bool
 inert_prop props = all (isNotForAll . uncurry entails) $
   [ (ws ++ given props, w) | (w,ws) <- choose (wanted props) ] ++
   [ (gs, g)                | (g,gs) <- choose (given props)  ]
 \end{code}
 
-
-\begin{code}
-data InertSetChanges  = NoChanges | NewInertSet InertSet
-
-updateInerts :: InertSetChanges -> InertSet -> InertSet
-updateInerts NoChanges is       = is
-updateInerts (NewInertSet is) _ = is
-
-\end{code}
 
 \subsection{WorkItems}
 
@@ -111,26 +103,28 @@ data PassResult = PassResult
   , consumed      :: Bool
   }
 
+data InertSetChanges  = NoChanges | NewInertSet InertSet
+
+updateInerts :: InertSetChanges -> InertSet -> InertSet
+updateInerts NoChanges is       = is
+updateInerts (NewInertSet is) _ = is
 \end{code}
 
-
-\begin{code}
-
-addWorkItems :: [WorkItem] -> InertSet -> Maybe InertSet
-addWorkItems ws is = loop is ws
-  where
-  loop is []          = return is
-  loop is (wi : wis)  =
-    do r <- addWork is wi
-       let is1  = updateInerts (inertChanges r) is
-           wis1 = newWork r ++ wis
-       if consumed r then loop is1 wis1
-                     else loop (addInert wi is1) wis1
-
-\end{code}
 
 
 \subsection{A Solver}
+
+\begin{code}
+addWorkItems :: [WorkItem] -> InertSet -> Maybe InertSet
+addWorkItems [] is = return is
+addWorkItems (wi : wis) is =
+  do r <- addWork is wi
+     let is1 = updateInerts (inertChanges r) is
+     addWorkItems (newWork r ++ wis)
+                  (if consumed r then is1 else addInert wi is1)
+\end{code}
+
+
 
 
 \begin{code}
@@ -161,6 +155,7 @@ addGiven props g =
 
 
 \begin{code}
+addWanted :: InertSet -> Prop -> Maybe PassResult
 addWanted props w =
   case entails (wanted props ++ given props) w of
 
@@ -194,9 +189,6 @@ addWanted props w =
       NotForAny -> mzero
       NotForAll -> return (w1 : inert, restart,changes)
       YesIf ps  -> return (inert, ps ++ restart,True)
-
-
-
 \end{code}
 
 
@@ -261,11 +253,11 @@ compose :: Subst -> Subst -> Subst
 compose s2 s1 = [ (x, apSubst s2 t) | (x,t) <- s1 ] ++
                 [ (x,t) | (x,t) <- s2, all (not . eqType x . fst) s1 ]
 
-equal :: Term -> Term -> Maybe Subst
-equal x y | x == y  = return []
-equal (Var x) t     = return [(x,t)] --- for simple terms no need to occur check
-equal t (Var x)     = return [(x,t)]
-equal _ _           = mzero
+mgu :: Term -> Term -> Maybe Subst
+mgu x y | x == y  = return []
+mgu (Var x) t     = return [(x,t)] --- for simple terms no need to occur check
+mgu t (Var x)     = return [(x,t)]
+mgu _ _           = mzero
 
 class ApSubst t where
   apSubst :: Subst -> t -> t
@@ -292,15 +284,14 @@ substToEqns su = [ Eq (Var x) t | (x,t) <- su ]
 -- Turn the equations that we have into a substitution, and return
 -- the remaining proposition.
 improvingSubst :: [Prop] -> Maybe (Subst, [Prop])
-improvingSubst = loop ([],[])
+improvingSubst ps0 = do (su,ps) <- loop ([],[]) ps0
+                        return (su, filter (not . trivial) ps)
   where
   loop (su,rest) (Eq x y : es) =
-    do su1 <- equal x y
-       let su2 = compose su1 su
-       loop (su2, apSubst su2 rest) (apSubst su2 es)
+    do su1 <- mgu x y
+       loop (compose su1 su, apSubst su1 rest) (apSubst su1 es)
   loop (su,rest) (e : es) = loop (su,e:rest) es
   loop su [] = return su
-
 \end{code}
 
 
@@ -330,6 +321,7 @@ new_asmp = CongFunEq op p refl refl old_asmp
 
 Adding more assumptions cannot make things less contradictory
 \begin{code}
+entails_any_prop :: [Prop] -> Prop -> Prop -> Bool
 entails_any_prop ps q p =
   case entails ps q of
     NotForAny -> isNotForAny (entails (p:ps) q)
@@ -339,6 +331,7 @@ entails_any_prop ps q p =
 Droppoing assumptions cannot make things more contradictory or more
 defined.
 \begin{code}
+enatils_all_prop :: Prop -> [Prop] -> Prop -> Bool
 enatils_all_prop p ps q =
   case entails (p:ps) q of
     NotForAll -> isNotForAll (entails ps q)
@@ -348,7 +341,9 @@ enatils_all_prop p ps q =
 
 \begin{code}
 entails :: [Prop] -> Prop -> Answer
-entails ps p | tr "entails?:" ps $ trace "  --------" $ trace ("  " ++ show p) False = undefined
+entails ps p | tr "entails?:" ps
+             $ trace "  --------"
+             $ trace ("  " ++ show p) False = undefined
 entails ps' p' =
   case closure ps' of
     Nothing -> error "bug: Inert invariant failed!"
@@ -371,18 +366,19 @@ closure ps = closure1 =<< improvingSubst ps
 
 closure1 :: (Subst, [Prop]) -> Maybe (Subst, [Prop])
 closure1 (su0, ps0) =
-  do let new = do (q,qs) <- choose ps0
-                  i      <- implied qs q
-                  guard (not (i `elem` ps0))
-                  return i
-     (su, ps') <- improvingSubst new
-     let ps  = filter (not . trivial) ps'
-         su1 = compose su su0
+  do (su, ps) <- improvingSubst
+              $ do (q,qs) <- choose ps0
+                   i      <- implied qs q
+                   guard (not (elem i ps0))
+                   return i
+
+     let su1 = compose su su0
          ps1 = apSubst su ps0
+
      case ps of
        [] -> tr "computed closure:" ps1
            $ return (su1, ps1)
-       _  -> tr "adding:" ps $ closure1 (su1,nub $ ps ++ ps1)
+       _  -> tr "adding:" ps $ closure1 (su1,nub (ps ++ ps1))
 
 
 tr :: Show a => String -> [a] -> b -> b
@@ -430,11 +426,9 @@ implied asmps prop =
 
 
 \begin{code}
+test :: [WorkItem] -> Maybe InertSet
 test ps = addWorkItems ps emptyInertSet
 
-ex1 = test [ (Wanted, EqFun Add (Var "y") (Var "x") (Var "z"))
-           , (Wanted, EqFun Add (Var "x1") (Var "y") (Var "z"))
-           ]
 \end{code}
 
 \begin{code}
@@ -455,16 +449,18 @@ nth_product n xs | n <= 1     = do x <- xs
                                    zs <- nth_product (n-1) ys
                                    return (x : zs)
 
+isNotForAny :: Answer -> Bool
 isNotForAny NotForAny = True
 isNotForAny _         = False
 
 
+isNotForAll :: Answer -> Bool
 isNotForAll NotForAll = True
 isNotForAll _         = False
 
+isYesIf :: Answer -> Bool
 isYesIf (YesIf _)     = True
 isYesIf _             = False
-
 
 \end{code}
 \end{document}
