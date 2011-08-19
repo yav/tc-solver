@@ -4,10 +4,16 @@
 \DefineVerbatimEnvironment{code}{Verbatim}{fontsize=\small}
 \DefineVerbatimEnvironment{example}{Verbatim}{fontsize=\small}
 
+\usepackage{amsmath}
+
 \newcommand{\To}{\Rightarrow}
+\newcommand{\ent}{\vdash}
 
 
 \begin{document}
+
+
+This document is a literate Haskell file.
 
 \begin{code}
 module Notes where
@@ -16,21 +22,127 @@ import Control.Monad(mzero,foldM,guard)
 import Test
 import Data.List(find,nub)
 import Debug.Trace
-
 \end{code}
+
+
+
+\subsection{Sets of Propositions}
+
+The solver manipulates two kinds of propositions: {\em given} propositions
+correspond to assumptions that may be used without proof,
+while {\em wanted} propositions correspond to goals that need to be proved.
+When working with collections of properties, it is convenient to group
+the assumptions and goals separately:
+
+\begin{code}
+data PropSet = PropSet { given :: [Prop], wanted :: [Prop] }
+
+emptyPropSet :: PropSet
+emptyPropSet = PropSet { given = [], wanted = [] }
+
+insertGiven :: Prop -> PropSet -> PropSet
+insertGiven g ps = ps { given = g : given ps }
+
+insertWanted :: Prop -> PropSet -> PropSet
+insertWanted w ps = ps { wanted = w : wanted ps }
+
+unionPropSets :: PropSet -> PropSet -> PropSet
+unionPropSets ps1 ps2 = PropSet { given  = given ps1  ++ given ps2
+                             , wanted = wanted ps1 ++ wanted ps2
+                             }
+\end{code}
+
+
+\subsection{Entailment}
+
+A central component of the solver is the entailment function, which determines
+if a set of assumptions (the first argument), entail a certain proposition
+(the second argument).
+
+\begin{code}
+entails :: [Prop] -> Prop -> Answer
+\end{code}
+
+The entailment function may return one of three possible answers,
+informally corresponding to ``certainly not'', ''not in its current form'',
+and ''(a qualified) yes'':
+
+\begin{code}
+data Answer = NotForAny | NotForAll | YesIf [Prop]
+
+isNotForAny :: Answer -> Bool
+isNotForAny NotForAny = True
+isNotForAny _         = False
+
+isNotForAll :: Answer -> Bool
+isNotForAll NotForAll = True
+isNotForAll _         = False
+
+isYesIf :: Answer -> Bool
+isYesIf (YesIf _)     = True
+isYesIf _             = False
+\end{code}
+
+More precisely, \Verb"NotForAny" asserts that the proposition in question
+contradicts the given set of assumptions, no matter how we instantiate its
+free variables.  The following two examples both result in a
+\Verb"NotForAny" answer (we use the more traditional mathematical notation
+for entailment)
+$$
+\begin{aligned}
+      & \ent 2 + 3 = 6 &\mapsto~\mathtt{NotForAny}\\
+x = 2 & \ent x = 3     &\mapsto~\mathtt{NotForAny}
+\end{aligned}
+$$
+The first equation is is inconsistent with the theory in general, while the
+second contradicts a particular assumption.
+
+If the entailment function returns \Verb"NotForAll", then the proposition in
+question is not entailed by the given assumptions but it also does not
+contradict them.  Typically this happens when a proposition contains
+free variables, and the entailment of the proposition depends on how
+these variables are instantiated (e.g., some instantiations result in
+propositions that are consistent with the assumptions, while others do not).
+For example, consider the following entailment question:
+$$
+\begin{aligned}
+& \ent x + y = 6     &\mapsto~\mathtt{NotForAll}
+\end{aligned}
+$$
+This results in \Verb"NotForAll" because without any assumptions the
+equation does not hold.  However some instantiations (e.g., $x = 2, y = 4$)
+are entailed, while others (e.g., $x = 7, y = 3$) are not.
+
+Finally, the entailment function may give a positive answer, with an optional
+list of sub-goals.  Consider the following examples:
+$$
+\begin{aligned}
+& \ent 1 + 2 = 3 &&\mapsto~\mathtt{YesIf~[]} \\
+& \ent x + 0 = x &&\mapsto~\mathtt{YesIf~[]} \\
+& \ent 3 + 5 = x &&\mapsto~\mathtt{YesIf~[x=8]}
+\end{aligned}
+$$
+The first two examples illustrate unconditional entailment, while the third
+example asserts that the proposition is entailed if and only if $x = 8$ holds.
+The sub-goals contained in a \Verb"YesIf" answer should be logically
+equivalent to the original goal (under the given assumptions) and also
+``simpler'', a concept that we shall discuss further in Section~\ref{sec0improvement}.
+
 
 
 \subsection{The Inert Set}
 
+\begin{code}
+type InertSet = PropSet
+\end{code}
+
 The {\em inert set} keeps track of the facts known by the solver
 and the goals that we tried to solve but failed.
 
-\begin{code}
-data InertSet = InertSet { given :: [Prop], wanted :: [Prop] }
+The purpose of the solver is to compute a ``minimal'' inert ste
 
-emptyInertSet :: InertSet
-emptyInertSet = InertSet { given = [], wanted = [] }
-\end{code}
+
+
 
 This data-structure satisfies the invariant that the stored propositions
 cannot ``interact''.  Like this:
@@ -43,53 +155,6 @@ inert_prop props = all (isNotForAll . uncurry entails) $
 \end{code}
 
 
-\subsection{WorkItems}
-
-\begin{code}
-type WorkItem         = (PropKind,Prop)
-data PropKind         = Given | Wanted
-                        deriving Show
-
-addInert :: WorkItem -> InertSet -> InertSet
-addInert (Given, g)  is = is { given  = g : given is }
-addInert (Wanted, w) is = is { wanted = w : wanted is }
-\end{code}
-
-
-
-
-
-A central component of the solver is the entailment function.
-
-As the name suggests, it tells us if a set of assumptions
-(the first argument), entail a certain proposition (the second argument).
-The function returns one of the following answers:
-
-\begin{code}
-data Answer = NotForAny | NotForAll | YesIf [Prop]
-
-\end{code}
-
-Informally, the three values may be thought of as ``certainly not'',
-''not in its current form'', and ''(a qualified) yes''.  More precisely,
-\Verb"NotForAny" states that the proposition in question contradicts the
-given set of assumptions, no matter how we instantiate it.  For example,
-the proposition $2 + 3 = 6$ will result in \Verb"NotForAny", no matter
-what the set of assumptions.
-$$
-\forall x.~not~(P~x)
-$$
-
-A milder form of rejection is captured by \Verb"NotForAll"---in this
-case we cannot
-$$
-not~(\forall x.~P~x)
-$$
-
-$$
-\forall x.~Q~x \To P~x
-$$
-
 
 
 
@@ -99,15 +164,15 @@ $$
 \begin{code}
 data PassResult = PassResult
   { inertChanges  :: InertSetChanges
-  , newWork       :: [WorkItem]
+  , newWork       :: PropSet
   , consumed      :: Bool
   }
 
-data InertSetChanges  = NoChanges | NewInertSet InertSet
+data InertSetChanges  = NoChanges | NewPropSet InertSet
 
 updateInerts :: InertSetChanges -> InertSet -> InertSet
 updateInerts NoChanges is       = is
-updateInerts (NewInertSet is) _ = is
+updateInerts (NewPropSet is) _ = is
 \end{code}
 
 
@@ -115,23 +180,29 @@ updateInerts (NewInertSet is) _ = is
 \subsection{A Solver}
 
 \begin{code}
-addWorkItems :: [WorkItem] -> InertSet -> Maybe InertSet
-addWorkItems [] is = return is
-addWorkItems (wi : wis) is =
-  do r <- addWork is wi
-     let is1 = updateInerts (inertChanges r) is
-     addWorkItems (newWork r ++ wis)
-                  (if consumed r then is1 else addInert wi is1)
+addWorkItems :: PropSet -> InertSet -> Maybe InertSet
+addWorkItems ps is =
+ case given ps of
+   g : gs ->
+     do r <- addGiven is g
+        let is1 = updateInerts (inertChanges r) is
+        addWorkItems (unionPropSets (newWork r) ps { given = gs })
+                     (if consumed r then is1 else insertGiven g  is1 )
+
+   [] ->
+     case wanted ps of
+       w : ws ->
+         do r <- addWanted is w
+            let is1 = updateInerts (inertChanges r) is
+            addWorkItems (unionPropSets (newWork r) ps { wanted = ws })
+                         (if consumed r then is1 else insertWanted w is1)
+       [] -> return is
 \end{code}
 
 
 
 
 \begin{code}
-addWork :: InertSet -> WorkItem -> Maybe PassResult
-addWork is (Given,p)  = addGiven is p
-addWork is (Wanted,p) = addWanted is p
-
 addGiven :: InertSet -> Prop -> Maybe PassResult
 addGiven props g =
   case entails (given props) g of
@@ -140,15 +211,15 @@ addGiven props g =
 
     NotForAll -> return
       PassResult
-        { inertChanges  = NewInertSet props { wanted = [] }
-        , newWork       = [ (Wanted,w) | w <- wanted props ]
+        { inertChanges  = NewPropSet props { wanted = [] }
+        , newWork       = props { given = [] }
         , consumed      = False
         }
 
     YesIf ps -> return
       PassResult
         { inertChanges    = NoChanges
-        , newWork         = [ (Given,p) | p <- ps ]
+        , newWork         = emptyPropSet { given = ps }
         , consumed        = True
         }
 \end{code}
@@ -164,7 +235,7 @@ addWanted props w =
     YesIf ps -> return
       PassResult
         { inertChanges    = NoChanges
-        , newWork         = [ (Wanted,p) | p <- ps ]
+        , newWork         = emptyPropSet { wanted = ps }
         , consumed        = True
         }
 
@@ -173,13 +244,13 @@ addWanted props w =
            foldM check ([],[],False) (choose (wanted props))
          if changes
           then return PassResult
-                 { inertChanges = NewInertSet props { wanted = inert }
-                 , newWork      = [ (Wanted,p) | p <- restart ]
+                 { inertChanges = NewPropSet props { wanted = inert }
+                 , newWork      = emptyPropSet { wanted = restart }
                  , consumed     = False
                  }
           else return PassResult
                  { inertChanges = NoChanges
-                 , newWork      = []
+                 , newWork      = emptyPropSet
                  , consumed     = False
                  }
 
@@ -328,7 +399,7 @@ entails_any_prop ps q p =
     _         -> True
 \end{code}
 
-Droppoing assumptions cannot make things more contradictory or more
+Dropping assumptions cannot make things more contradictory or more
 defined.
 \begin{code}
 enatils_all_prop :: Prop -> [Prop] -> Prop -> Bool
@@ -340,7 +411,6 @@ enatils_all_prop p ps q =
 
 
 \begin{code}
-entails :: [Prop] -> Prop -> Answer
 entails ps p | tr "entails?:" ps
              $ trace "  --------"
              $ trace ("  " ++ show p) False = undefined
@@ -421,21 +491,12 @@ implied asmps prop =
   where
   p1 : p2 : p3 : p4 : p5 : _ = map (`nth_product` asmps) [ 1 .. ]
 
-
-
-
 \end{code}
 
 
 
 \begin{code}
-test :: [WorkItem] -> Maybe InertSet
-test ps = addWorkItems ps emptyInertSet
-
-\end{code}
-
-\begin{code}
-instance Show InertSet where
+instance Show PropSet where
   show is = "\n" ++
             unlines [ "G: " ++ show p | p <- given is ] ++
             unlines [ "W: " ++ show p | p <- wanted is ]
@@ -451,19 +512,6 @@ nth_product n xs | n <= 1     = do x <- xs
                  | otherwise  = do (x,ys) <- choose xs
                                    zs <- nth_product (n-1) ys
                                    return (x : zs)
-
-isNotForAny :: Answer -> Bool
-isNotForAny NotForAny = True
-isNotForAny _         = False
-
-
-isNotForAll :: Answer -> Bool
-isNotForAll NotForAll = True
-isNotForAll _         = False
-
-isYesIf :: Answer -> Bool
-isYesIf (YesIf _)     = True
-isYesIf _             = False
 
 \end{code}
 \end{document}

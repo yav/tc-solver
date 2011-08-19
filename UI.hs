@@ -10,6 +10,7 @@ import qualified Data.Map as M
 import Numeric
 import Data.Maybe(fromMaybe)
 import System.Process
+import System.Exit(ExitCode(..))
 
 import Notes
 import Test
@@ -27,7 +28,7 @@ main :: IO ()
 main = withSocketsDo
      $ do s <- listenOn (PortNumber port)
           info $ "Listening on port " ++ show port
-          system "gnome-open UI.html"
+          ExitSuccess <- system "gnome-open UI.html"
           loop s initS `finally` sClose s
   where loop s st = loop s =<< onConnect st =<< accept s
 
@@ -49,24 +50,31 @@ onConnect s (h,host,p) =
 
 --------------------------------------------------------------------------------
 data Cmd = AddC Int WorkItem | RmC Int
+type WorkItem = (PropKind,Prop)
+data PropKind = Given | Wanted deriving Show
 
 data S = S { entered  :: M.Map Int WorkItem
-           , inertSet :: Maybe InertSet
+           , inertSet :: Maybe PropSet
            }
 
 initS :: S
-initS = S { entered = M.empty, inertSet = Just emptyInertSet }
+initS = S { entered = M.empty, inertSet = Just emptyPropSet }
 
 
+addWorkItemsUI :: [WorkItem] -> PropSet -> Maybe PropSet
+addWorkItemsUI ws is = addWorkItems set is
+  where set = PropSet { wanted = [ w | (Wanted,w) <- ws ]
+                      , given  = [ g | (Given,g) <- ws ]
+                      }
 
 processCmd :: Cmd -> S -> S
 processCmd cmd s =
   case cmd of
     AddC x wi -> S { entered   = M.insert x wi (entered s)
-                   , inertSet  = addWorkItems [wi] =<< inertSet s
+                   , inertSet  = addWorkItemsUI [wi] =<< inertSet s
                    }
     RmC x     -> S { entered   = ents
-                   , inertSet  = addWorkItems (M.elems ents) emptyInertSet
+                   , inertSet  = addWorkItemsUI (M.elems ents) emptyPropSet
                    }
       where ents = M.delete x (entered s)
 
@@ -176,7 +184,7 @@ parseProp txt =
 renderWI :: WorkItem -> [String]
 renderWI (x,y) = [ show x, show y ]
 
-renderIS :: Maybe InertSet -> String
+renderIS :: Maybe PropSet -> String
 renderIS Nothing = "[ [\"Wanted\",\"(inconsistent)\"]," ++
                      "[\"Given\", \"(inconsistent)\"] ]"
 renderIS (Just xs) = show ( [ renderWI (Given,g) | g <- given xs ] ++
