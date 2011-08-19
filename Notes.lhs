@@ -282,7 +282,7 @@ substToEqns :: Subst -> [Prop]
 substToEqns su = [ Eq (Var x) t | (x,t) <- su ]
 
 -- Turn the equations that we have into a substitution, and return
--- the remaining proposition.
+-- the remaining propositions.
 improvingSubst :: [Prop] -> Maybe (Subst, [Prop])
 improvingSubst ps0 = do (su,ps) <- loop ([],[]) ps0
                         return (su, filter (not . trivial) ps)
@@ -355,9 +355,11 @@ entails ps' p' =
                 case closure (p:ps) of
                   Nothing -> trace "definately not" NotForAny
                   Just (su1,_)
-                    | solve (apSubst su1 ps) (apSubst su1 p) ->
-                        trace "yes!" YesIf (substToEqns su1)
+                    | solve (apSubst su1 ps) (apSubst su1 p)
+                   && not (p' `elem` eqns) ->
+                        trace "yes!" YesIf eqns
                     | otherwise -> trace "no" NotForAll
+                    where eqns = substToEqns su1
 
 
 
@@ -396,6 +398,7 @@ trivial = solve []
 
 \begin{code}
 solve :: [Prop] -> Prop -> Bool
+solve  _ (Eq x y) | x == y = True
 solve asmps prop =
       solve0 [] prop
    || any (`solve1` prop) p1
