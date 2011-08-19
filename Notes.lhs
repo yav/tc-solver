@@ -69,18 +69,6 @@ and ''(a qualified) yes'':
 
 \begin{code}
 data Answer = NotForAny | NotForAll | YesIf [Prop]
-
-isNotForAny :: Answer -> Bool
-isNotForAny NotForAny = True
-isNotForAny _         = False
-
-isNotForAll :: Answer -> Bool
-isNotForAll NotForAll = True
-isNotForAll _         = False
-
-isYesIf :: Answer -> Bool
-isYesIf (YesIf _)     = True
-isYesIf _             = False
 \end{code}
 
 More precisely, \Verb"NotForAny" asserts that the proposition in question
@@ -155,8 +143,15 @@ inert_prop props = all (isNotForAll . uncurry entails) $
 
 The predicate consists of two parts, both of the same form:  the first one
 asserts that the collection of given facts is consistent and non-redundant,
-while the second asserts that the collection of goals is consistent and
-non-redundant.
+while the second asserts the same property for the set of goals.
+The ``consistent and non-redundant'' property is captured
+by the requirement that when we use the entailment function we get
+the answer \Verb"NotForAll"---had we obtained \Verb"NotFroAny", we would
+have a constradiction and hence the propositions would not be consistent,
+and if we ontained \Verb"YesIf", then then the proposition would
+be redundant and hence may be eliminated.  The predicate makes use
+of the auxiliary function \Verb"choose", which extracts a single
+element from a list in all possible ways:
 
 \begin{code}
 choose :: [a] -> [(a,[a])]
@@ -168,84 +163,85 @@ choose (x:xs) = (x,xs) : [ (y, x:ys) | (y,ys) <- choose xs ]
 
 
 
-\subsection{Interface to The Combined Solver}
+\subsection{The Solver}
+
+The purpose of the solver is to turn an arbitrary set of propositions
+into an inert one.  This is done by starting with some inert set
+(e.g., the empty set of propositions) and then adding each new proposition
+one at a time.  Assumptions and goals are added in different ways, so
+we have two different functions to add a proposition to an existing
+inert set:
 
 \begin{code}
+addGiven  :: Prop -> InertSet -> Maybe PassResult
+addWanted :: Prop -> InertSet -> Maybe PassResult
+
 data PassResult = PassResult
-  { inertChanges  :: InertSetChanges
-  , newWork       :: PropSet
-  , consumed      :: Bool
+  { newInert  :: InertSet
+  , newWork   :: PropSet
   }
-
-data InertSetChanges  = NoChanges | NewPropSet InertSet
-
-updateInerts :: InertSetChanges -> InertSet -> InertSet
-updateInerts NoChanges is       = is
-updateInerts (NewPropSet is) _ = is
 \end{code}
 
-
-
-\subsection{A Solver}
+If successful, both functions return a \Verb"PassResult" value, which
+contains an updated inert set and, potentially, some additional propositions
+that need to be added to the set.  The actual sover just keeps using these
+two functions until it runs out of work to do:
 
 \begin{code}
 addWorkItems :: PropSet -> InertSet -> Maybe InertSet
 addWorkItems ps is =
  case given ps of
    g : gs ->
-     do r <- addGiven is g
-        let is1 = updateInerts (inertChanges r) is
-        addWorkItems (unionPropSets (newWork r) ps { given = gs })
-                     (if consumed r then is1 else insertGiven g  is1 )
+     do r <- addGiven g is
+        addWorkItems (unionPropSets (newWork r) ps { given = gs }) (newInert r)
 
    [] ->
      case wanted ps of
        w : ws ->
-         do r <- addWanted is w
-            let is1 = updateInerts (inertChanges r) is
+         do r <- addWanted w is
             addWorkItems (unionPropSets (newWork r) ps { wanted = ws })
-                         (if consumed r then is1 else insertWanted w is1)
+                                                                  (newInert r)
        [] -> return is
 \end{code}
 
+Note that we start by first adding all assumptions, and only then we consider
+the goals because the assumptions might help us to solve the goals.
 
 
+\subsection{Adding a New Assumption}
 
 \begin{code}
-addGiven :: InertSet -> Prop -> Maybe PassResult
-addGiven props g =
+addGiven g props =
   case entails (given props) g of
 
     NotForAny -> mzero
 
     NotForAll -> return
       PassResult
-        { inertChanges  = NewPropSet props { wanted = [] }
-        , newWork       = props { given = [] }
-        , consumed      = False
+        { newInert  = PropSet { wanted = [], given = g : given props }
+        , newWork   = props { given = [] }
         }
 
     YesIf ps -> return
       PassResult
-        { inertChanges    = NoChanges
-        , newWork         = emptyPropSet { given = ps }
-        , consumed        = True
+        { newInert  = props
+        , newWork   = emptyPropSet { given = ps }
         }
 \end{code}
 
 
+\subsection{Adding a New Goal}
+
 \begin{code}
-addWanted :: InertSet -> Prop -> Maybe PassResult
-addWanted props w =
+addWanted w props =
   case entails (wanted props ++ given props) w of
 
     NotForAny -> mzero
 
     YesIf ps -> return
       PassResult
-        { inertChanges    = NoChanges
-        , newWork         = emptyPropSet { wanted = ps }
-        , consumed        = True
+        { newInert  = props
+        , newWork   = emptyPropSet { wanted = ps }
         }
 
     NotForAll ->
@@ -253,14 +249,12 @@ addWanted props w =
            foldM check ([],[],False) (choose (wanted props))
          if changes
           then return PassResult
-                 { inertChanges = NewPropSet props { wanted = inert }
-                 , newWork      = emptyPropSet { wanted = restart }
-                 , consumed     = False
+                 { newInert = props { wanted = w : inert }
+                 , newWork  = emptyPropSet { wanted = restart }
                  }
           else return PassResult
-                 { inertChanges = NoChanges
-                 , newWork      = emptyPropSet
-                 , consumed     = False
+                 { newInert = props { wanted = w : wanted props }
+                 , newWork  = emptyPropSet
                  }
 
   where
@@ -518,6 +512,22 @@ nth_product n xs | n <= 1     = do x <- xs
                                    zs <- nth_product (n-1) ys
                                    return (x : zs)
 
+
+isNotForAny :: Answer -> Bool
+isNotForAny NotForAny = True
+isNotForAny _         = False
+
+isNotForAll :: Answer -> Bool
+isNotForAll NotForAll = True
+isNotForAll _         = False
+
+isYesIf :: Answer -> Bool
+isYesIf (YesIf _)     = True
+isYesIf _             = False
+
+
 \end{code}
+
+
 \end{document}
 
