@@ -348,7 +348,7 @@ enatils_all_prop p ps q =
 
 \begin{code}
 entails :: [Prop] -> Prop -> Answer
-entails ps p | trace ("entails: " ++ show (ps,p)) False = undefined
+entails ps p | tr "entails?:" ps $ trace "  --------" $ trace ("  " ++ show p) False = undefined
 entails ps' p' =
   case closure ps' of
     Nothing -> error "bug: Inert invariant failed!"
@@ -375,19 +375,32 @@ closure1 (su0, ps0) =
                   i      <- implied qs q
                   guard (not (i `elem` ps0))
                   return i
-     (su, ps) <- improvingSubst new
-     let su1 = compose su su0
+     (su, ps') <- improvingSubst new
+     let ps  = filter (not . trivial) ps'
+         su1 = compose su su0
          ps1 = apSubst su ps0
      case ps of
-       [] -> trace ("closure: " ++ show ps1) $ return (su1, ps1)
-       _  -> trace ("adding " ++ show ps) $ closure1 (su1,nub $ ps ++ ps1)
+       [] -> tr "computed closure:" ps1
+           $ return (su1, ps1)
+       _  -> tr "adding:" ps $ closure1 (su1,nub $ ps ++ ps1)
+
+
+tr :: Show a => String -> [a] -> b -> b
+tr x ys z = trace x (trace msg z)
+  where msg = case ys of
+                [] -> "  (empty)"
+                _  -> unlines [ "  " ++ show y | y <- ys ]
 \end{code}
 
 
+\begin{code}
+trivial :: Prop -> Bool
+trivial = solve []
+\end{code}
 
 \begin{code}
 solve :: [Prop] -> Prop -> Bool
-solve asmps prop = trace (show (asmps,prop)) $
+solve asmps prop =
       solve0 [] prop
    || any (`solve1` prop) p1
    || any (`solve2` prop) p2
