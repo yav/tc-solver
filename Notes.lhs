@@ -113,8 +113,9 @@ $$
 The first two examples illustrate unconditional entailment, while the third
 example asserts that the proposition is entailed if and only if $x = 8$ holds.
 The sub-goals contained in a \Verb"YesIf" answer should be logically
-equivalent to the original goal (under the given assumptions) and also
-``simpler'', a concept that we shall discuss further in Section~\ref{sec0improvement}.
+equivalent to the original goal (under the given assumptions) but also
+``simpler'', a concept that we shall discuss further in
+Section~\ref{sec_improvement}.
 
 
 
@@ -176,10 +177,7 @@ inert set:
 addGiven  :: Prop -> InertSet -> Maybe PassResult
 addWanted :: Prop -> InertSet -> Maybe PassResult
 
-data PassResult = PassResult
-  { newInert  :: InertSet
-  , newWork   :: PropSet
-  }
+data PassResult = PassResult { newInert :: InertSet, newWork :: PropSet }
 \end{code}
 
 If successful, both functions return a \Verb"PassResult" value, which
@@ -247,22 +245,23 @@ addWanted w props =
     NotForAll ->
       do (inert,restart,changes) <-
            foldM check ([],[],False) (choose (wanted props))
+
          if changes
-          then return PassResult
-                 { newInert = props { wanted = w : inert }
-                 , newWork  = emptyPropSet { wanted = restart }
-                 }
-          else return PassResult
-                 { newInert = props { wanted = w : wanted props }
-                 , newWork  = emptyPropSet
-                 }
+           then return PassResult
+                  { newInert = props { wanted = w : inert }
+                  , newWork  = emptyPropSet { wanted = restart }
+                  }
+           else return PassResult
+                  { newInert = props { wanted = w : wanted props }
+                  , newWork  = emptyPropSet
+                  }
 
   where
   check (inert,restart,changes) (w1,ws) =
     case entails (w : ws ++ given props) w1 of
       NotForAny -> mzero
-      NotForAll -> return (w1 : inert, restart,changes)
-      YesIf ps  -> return (inert, ps ++ restart,True)
+      NotForAll -> return (w1 : inert, restart, changes)
+      YesIf ps  -> return (inert, ps ++ restart, True)
 \end{code}
 
 
@@ -453,7 +452,7 @@ closure1 (su0, ps0) =
      case ps of
        [] -> tr "computed closure:" ps1
            $ return (su1, ps1)
-       _  -> tr "adding:" ps $ closure1 (su1,nub (ps ++ ps1))
+       _  -> tr "adding:" (nub ps) $ closure1 (su1,nub (ps ++ ps1))
 
 
 tr :: Show a => String -> [a] -> b -> b
