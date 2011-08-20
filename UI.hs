@@ -3,6 +3,7 @@ import Prelude hiding (catch)
 import Control.Exception
 import System.IO
 import Data.Typeable
+import Data.List
 import Control.Monad
 import Network
 import Data.Char
@@ -11,6 +12,7 @@ import Numeric
 import Data.Maybe(fromMaybe)
 import System.Process
 import System.Exit(ExitCode(..))
+import Text.ParserCombinators.ReadP
 
 import Notes
 import Test
@@ -42,18 +44,24 @@ onConnect s (h,host,p) =
        Nothing -> respond h "402 Bad request" "[]" >> return s
        Just cmd ->
          do let s1 = processCmd cmd s
-            respond h "200 OK" (renderIS (inertSet s1))
+                wis = case cmd of
+                        AddC _ x -> x
+                        _       -> []
+            respond h "200 OK" (list [ list (map renderWI wis)
+                                     , renderIS (inertSet s1)
+                                     ]
+                               )
             return s1
 
 
 
 
 --------------------------------------------------------------------------------
-data Cmd = AddC Int WorkItem | RmC Int
+data Cmd = AddC Int [WorkItem] | RmC Int
 type WorkItem = (PropKind,Prop)
 data PropKind = Given | Wanted deriving Show
 
-data S = S { entered  :: M.Map Int WorkItem
+data S = S { entered  :: M.Map Int [WorkItem]
            , inertSet :: Maybe PropSet
            }
 
@@ -71,10 +79,11 @@ processCmd :: Cmd -> S -> S
 processCmd cmd s =
   case cmd of
     AddC x wi -> S { entered   = M.insert x wi (entered s)
-                   , inertSet  = addWorkItemsUI [wi] =<< inertSet s
+                   , inertSet  = addWorkItemsUI wi =<< inertSet s
                    }
     RmC x     -> S { entered   = ents
-                   , inertSet  = addWorkItemsUI (M.elems ents) emptyPropSet
+                   , inertSet  = addWorkItemsUI (concat $ M.elems ents)
+                                                                  emptyPropSet
                    }
       where ents = M.delete x (entered s)
 
@@ -99,6 +108,7 @@ respond h resp txt =
        , "Content-Type: application/json; charset=UTF-8"
        , "Access-Control-Allow-Origin: *"
        ]
+     info txt
      hSetNewlineMode h noNewlineTranslation
      hPutStr h txt -- XXX: encode utf-8
      hClose h
@@ -133,7 +143,7 @@ parse url =
       case break (== '&') rest of
         (ntxt,_:p) ->
           do n  <- readMb ntxt
-             wi <- parseWI p
+             wi <- parseWI n p
              return (AddC n wi)
         _ -> mzero
 
@@ -143,54 +153,86 @@ parse url =
 
     _ -> Nothing
 
-parseWI :: String -> Maybe WorkItem
-parseWI txt =
+parseWI :: Int -> String -> Maybe [WorkItem]
+parseWI n txt =
   case break (== '&') txt of
-    ("Wanted", _:p) -> fmap ((,) Wanted) $ parseProp p
-    ("Given", _:p)  -> fmap ((,) Given) $ parseProp p
+    ("Wanted", _:p) -> map ((,) Wanted) `fmap` parseProp n p
+    ("Given", _:p)  -> map ((,) Given)  `fmap` parseProp n p
     _               -> Nothing
 
-parseProp :: String -> Maybe Prop
-parseProp txt =
+parseProp :: Int -> String -> Maybe [Prop]
+parseProp n txt =
   do s <- dec txt
-     case break op s of
-       (as,'<' : '=' : bs) -> Leq `fmap` parseT as `ap` parseT bs
-       (as,'=': bs)        -> Eq `fmap` parseT as `ap` parseT bs
-       (as, opc : rest) ->
-          case break (== '=') rest of
-            (bs,_:cs) -> EqFun theOp `fmap` parseT as `ap` parseT bs
-                                                      `ap` parseT cs
-              where theOp = case opc of
-                              '+' -> Add
-                              '*' -> Mul
-                              '^' -> Exp
-                              _ -> error "bug: unexpected op"
-            _ -> Nothing
-       _ -> Nothing
-
+     readMb' (readP_to_S (pEqn n)) s
   where
   dec ('%' : x : y : xs) = do n <- readMb' readHex [x,y]
                               fmap (toEnum n :) (dec xs)
   dec []                 = return []
   dec (x : xs)           = (x:) `fmap` dec xs
 
-  parseT "" = Nothing
-  parseT t = return $ fromMaybe (Var z) (num `fmap` readMb z)
-    where z = trim t
-  trim     = reverse . dropWhile isSpace . reverse . dropWhile isSpace
-
-  op x = x `elem` "+*^<="
-
-renderWI :: WorkItem -> [String]
-renderWI (x,y) = [ show x, show y ]
+renderWI :: WorkItem -> String
+renderWI (x,y) = list [ show (show x), show (show y) ]
 
 renderIS :: Maybe PropSet -> String
 renderIS Nothing = "[ [\"Wanted\",\"(inconsistent)\"]," ++
                      "[\"Given\", \"(inconsistent)\"] ]"
-renderIS (Just xs) = show ( [ renderWI (Given,g) | g <- given xs ] ++
+renderIS (Just xs) = list ( [ renderWI (Given,g) | g <- given xs ] ++
                             [ renderWI (Wanted,w) | w <- wanted xs ])
 
+list xs = "[" ++ concat (intersperse "," xs) ++ "]"
 
+pEqn :: Int -> ReadP [Prop]
+pEqn n =
+  msum
+    [ do (t1,op,t2,n',es1) <- pTerm pref 0
+         tchar '='
+         (t3,_,es2) <- pAtom pref n'
+         return (EqFun op t1 t2 t3 : es1 ++ es2)
+    , do (t1,n1,es1) <- pAtom pref 0
+         r <- pRel
+         (t2,_,es2) <- pAtom pref n1
+         return (r t1 t2 : es1 ++ es2)
+    ]
+  where pref = show n ++ "_"
+
+pTerm :: String -> Int -> ReadP (Term,Op,Term,Int,[Prop])
+pTerm pref n0 =
+  do (t1,n1,es1) <- pAtom pref n0
+     op <- pOp
+     (t2,n2,es2) <- pAtom pref n1
+     return (t1,op,t2,n2,es1++es2)
+
+pAtom :: String -> Int -> ReadP (Term, Int, [Prop])
+pAtom pref n =
+  do munch isSpace
+     msum
+       [ do x <- readS_to_P reads
+            return (Num x Nothing, n, [])
+       , do a <- satisfy (\x -> isAlpha x || x == '_')
+            as <- munch (\x -> isAlphaNum x || x == '_')
+            return (Var (a:as), n, [])
+       , do (t1,op,t2,n',es) <- between (tchar '(') (tchar ')') (pTerm pref n)
+            let x = Var (newVar pref n')
+            return (x, n'+1, EqFun op t1 t2 x : es)
+       ]
+
+pRel :: ReadP (Term -> Term -> Prop)
+pRel = msum [ tchar '=' >> return Eq
+            , tchar '<' >> char '=' >> return Leq
+            ]
+
+pOp :: ReadP Op
+pOp = msum [ tchar '+' >> return Add
+           , tchar '*' >> return Mul
+           , tchar '^' >> return Exp
+           ]
+
+newVar :: String -> Int -> String
+newVar pref n = "_v" ++ pref ++ show n
+
+tchar p = munch isSpace >> char p
+
+test p ys = readMb' (readP_to_S p) ys
 
 --------------------------------------------------------------------------------
 readMb     :: Read a => String -> Maybe a

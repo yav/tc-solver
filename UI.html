@@ -86,7 +86,8 @@ function sendMessage(op,ty,val) {
   req.onreadystatechange=function() {
     if (req.readyState==4) {
       if (req.status==200) {
-        populate_list("inert" + ty, JSON.parse(req.responseText));
+        var json = JSON.parse(req.responseText);
+        populate_list("inert" + ty, json[1]);
         ok = true;
       }
     }
