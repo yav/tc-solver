@@ -214,17 +214,15 @@ addGiven g props =
 
     NotForAny -> mzero
 
-    NotForAll -> return
-      PassResult
-        { newInert  = PropSet { wanted = [], given = g : given props }
-        , newWork   = props { given = [] }
-        }
+    NotForAll -> return PassResult
+      { newInert  = PropSet { wanted = [], given = g : given props }
+      , newWork   = props { given = [] }
+      }
 
-    YesIf ps -> return
-      PassResult
-        { newInert  = props
-        , newWork   = emptyPropSet { given = ps }
-        }
+    YesIf ps -> return PassResult
+      { newInert  = props
+      , newWork   = emptyPropSet { given = ps }
+      }
 \end{code}
 
 
@@ -236,32 +234,25 @@ addWanted w props =
 
     NotForAny -> mzero
 
-    YesIf ps -> return
-      PassResult
-        { newInert  = props
-        , newWork   = emptyPropSet { wanted = ps }
-        }
+    YesIf ps -> return PassResult
+      { newInert  = props
+      , newWork   = emptyPropSet { wanted = ps }
+      }
 
     NotForAll ->
-      do (inert,restart,changes) <-
-           foldM check ([],[],False) (choose (wanted props))
+      do (inert,restart) <- foldM check ([w],[]) (choose (wanted props))
 
-         if changes
-           then return PassResult
-                  { newInert = props { wanted = w : inert }
-                  , newWork  = emptyPropSet { wanted = restart }
-                  }
-           else return PassResult
-                  { newInert = props { wanted = w : wanted props }
-                  , newWork  = emptyPropSet
-                  }
+         return PassResult
+           { newInert = props { wanted = inert }
+           , newWork  = emptyPropSet { wanted = restart }
+           }
 
   where
-  check (inert,restart,changes) (w1,ws) =
+  check (inert,restart) (w1,ws) =
     case entails (w : ws ++ given props) w1 of
       NotForAny -> mzero
-      NotForAll -> return (w1 : inert, restart, changes)
-      YesIf ps  -> return (inert, ps ++ restart, True)
+      NotForAll -> return (w1 : inert, restart)
+      YesIf ps  -> return (inert, ps ++ restart)
 \end{code}
 
 
