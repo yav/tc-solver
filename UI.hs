@@ -193,16 +193,16 @@ pEqn n =
          (t2,_,es2) <- pAtom pref n1
          return (r t1 t2 : es1 ++ es2)
     ]
-  where pref = show n ++ "_"
+  where pref = n
 
-pTerm :: String -> Int -> ReadP (Term,Op,Term,Int,[Prop])
+pTerm :: Int -> Int -> ReadP (Term,Op,Term,Int,[Prop])
 pTerm pref n0 =
   do (t1,n1,es1) <- pAtom pref n0
      op <- pOp
      (t2,n2,es2) <- pAtom pref n1
      return (t1,op,t2,n2,es1++es2)
 
-pAtom :: String -> Int -> ReadP (Term, Int, [Prop])
+pAtom :: Int -> Int -> ReadP (Term, Int, [Prop])
 pAtom pref n =
   do munch isSpace
      msum
@@ -227,8 +227,11 @@ pOp = msum [ tchar '+' >> return Add
            , tchar '^' >> return Exp
            ]
 
-newVar :: String -> Int -> String
-newVar pref n = "_v" ++ pref ++ show n
+newVar :: Int -> Int -> String
+newVar pref n = (vars !! n) ++ "_" ++ show pref
+  where vars      = concatMap chunk [ 0 .. ]
+        toVar c a = if a == 0 then [c] else c : show a
+        chunk n   = map (`toVar` n) [ 'a' .. 'z' ]
 
 tchar p = munch isSpace >> char p
 
