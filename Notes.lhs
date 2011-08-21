@@ -421,7 +421,8 @@ entails ps' p' =
                     | solve (apSubst su1 ps) (apSubst su1 p)
                    && not (p' `elem` eqns) ->
                         trace "yes!" YesIf eqns
-                    | otherwise -> trace "no" NotForAll
+                    | p == p'   -> trace "no" NotForAll
+                    | otherwise -> YesIf [p]
                     where eqns = substToEqns su1
 
 
