@@ -8,52 +8,63 @@
 
 
 
-First order terms.
+Terms and Propositions
 
 > data Var    = V String
 >             | NV String
 >               deriving (Eq,Ord)
 >
-> data Op     = Add | Mul | Exp
->               deriving (Eq,Ord)
->
+> numV :: Var -> Bool
+> numV (NV _) = True
+> numV (V _)  = False
+
 > data Term   = App Op Term Term
 >             | Const Integer
 >             | Var Var
 >               deriving (Eq,Ord)
 >
-> data Rel    = Eq | Leq
->               deriving (Eq,Ord)
->
-> data Eqn    = EqFun Op Term Term {- = -} Term     -- e.g, x + y = z
->             | Rel Rel Term Term
+> data Prop   = Prop Op [Term]
 >               deriving Eq
+>
+> data Op     = Add | Mul | Exp | Eq | Leq
+>               deriving (Eq,Ord)
 
-> data Rule   = Rule { rAsmps :: [Eqn]
->                    , rSides :: [Eqn]      -- only NV vars here
->                    , rConc  :: Eqn
+
+
+Utilities for easy input
+
+> instance Num Term where
+>   fromInteger = Const
+>   x + y       = App Add x y
+>   x * y       = App Mul x y
+>   abs         = error "Term: abs"
+>   signum      = error "Term: signum"
+>
+> infixr 8 ^^^
+> (^^^) :: Term -> Term -> Term
+> x ^^^ y = App Exp x y
+>
+> infix 2 ===
+> (===) :: Term -> Term -> Prop
+> x === y = Prop Eq [x,y]
+>
+> infix 2 <==
+> (<==) :: Term -> Term -> Prop
+> t1 <== t2 = Prop Leq [t1,t2]
+
+
+
+Rules
+
+> data Rule   = Rule { rAsmps :: [Prop]
+>                    , rSides :: [Prop]      -- only NV vars here
+>                    , rConc  :: Prop
 >                    , rName  :: RuleName
 >                    }
->
-> data RuleName = RuleBasic String
->               | RuleInst Subst RuleName
->               | RuleCut RuleName Integer RuleName
->               | EqSym RuleName
->               | EqTrans RuleName RuleName
->
-> -- A smart constructor to avoid successive instantiations.
-> ruleInstName :: Subst -> RuleName -> RuleName
-> ruleInstName su2 (RuleInst su1 r) = RuleInst (compose su2 su1) r
-> ruleInstName su r                 = RuleInst su r
->
->
-> rule :: String -> Eqn -> Rule
-> rule name r = aRule name [] r
->
-> axiom :: String -> Eqn -> Rule
-> axiom name r = (rule name r) { rSides = [ r ] }
->
-> aRule :: String -> [Eqn] -> Eqn -> Rule
+
+Rule constructors
+
+> aRule :: String -> [Prop] -> Prop -> Rule
 > aRule name as r = ru
 >   where ru = Rule { rAsmps  = as
 >                   , rSides  = []
@@ -61,77 +72,83 @@ First order terms.
 >                   , rName   = RuleBasic name
 >                   }
 >
+> rule :: String -> Prop -> Rule
+> rule name r = aRule name [] r
+>
+> axiom :: String -> Prop -> Rule
+> axiom name r = (rule name r) { rSides = [ r ] }
+>
+
+
+> data RuleName = RuleBasic String
+>               | RuleInst Subst RuleName
+>               | RuleCut RuleName Integer RuleName
+>               | EqSym RuleName
+>               | EqTrans RuleName RuleName
+>                 deriving Eq
+>
+> -- A smart constructor to avoid successive instantiations.
+> ruleInstName :: Subst -> RuleName -> RuleName
+> ruleInstName su2 (RuleInst su1 r) = RuleInst (compose su2 su1) r
+> ruleInstName su r                 = RuleInst su r
+>
+> trivialRule :: Rule -> Bool
+> trivialRule r = all numV (fvs (rConc r))    -- axiom
+>              || not (and (mapMaybe evalSide (rSides r))) -- assumes false
+>              || rConc r `elem` rAsmps r   -- assumes the conclusion
+>
+> evalSide :: Prop -> Maybe Bool
+> evalSide (Prop op [Const x, Const y, Const z])
+>   | Add <- op = return (x + y == z)
+>   | Mul <- op = return (x * y == z)
+>   | Exp <- op = return (x ^ y == z)
+> evalSide (Prop op [Const x, Const y])
+>   | Eq  <- op = return (x == y)
+>   | Leq <- op = return (x <= y)
+> evalSide _ = mzero
+
+
+
 > normalize :: Rule -> Rule
 > normalize r = let (sides, others) = partition isSide (rAsmps r)
->               in r { rAsmps = others, rSides = sides ++ rSides r }
+>               in r { rAsmps = others, rSides = filter nonTriv sides
+>                                                               ++ rSides r }
 >   where isSide = all numV . fvs
+>         nonTriv side = case evalSide side of
+>                          Just t  -> not t
+>                          Nothing -> True
 
-
-
-> infix 2 ===
-> (===) :: Term -> Term -> Eqn
-> x === y = Rel Eq x y
->
-> infix 2 <==
-> (<==) :: Term -> Term -> Eqn
-> t1 <== t2 = Rel Leq t1 t2
->
-> infixr 8 ^^^
-> (^^^) :: Term -> Term -> Term
-> x ^^^ y = App Exp x y
 
 
 The rules
 
 > onlyFRules :: [Rule]
-> onlyFRules = []
+> onlyFRules = foldr addRule [] (commRules ++ asmpRules ++ leqRules ++ notSymRules)
 
 > onlyBRules :: [Rule]
-> onlyBRules = [] -- map toSimpleRule commRules
-
+> onlyBRules = axiomSchemas ++ simpleRules
 
 > namedRules :: [Rule]
-> namedRules = foldr addRule []
->            $ commute
->            $ specAsmps
->            $ namedAxioms ++ namedSimples
->                 ++ {-commuteAsmps-} (namedAsmpRules ++ namedADrules)
->                 ++ namedCommRules
->   where
->   namedAxioms     = map toSimpleRule axiomSchemas
->   namedSimples    = map toSimpleRule simpleRules
->   namedAsmpRules  = map toSimpleRule asmpRules ++
->                                           map isFun [ Add, Mul, Exp ]
->   namedCommRules  = map toSimpleRule commRules
->
->   namedADrules    = map toSimpleRule (sym notSymRules)
->
->   sym rs          = rs ++ mapMaybe eqSym rs
->   commute rs      = rs ++ do r <- rs
->                              c <- namedCommRules
->                              cutRule c r
->
->   specAsmps rs    = rs ++ do r <- rs
->                              c <- namedAxioms ++ namedSimples
->                              cutRule r c
->
->   commuteAsmps rs = rs ++ do r <- rs
->                              c <- namedCommRules
->                              cutRule r c
->
->   assocAsmps rs   = rs ++ do r <- rs
->                              c <- namedADrules
->                              cutRule r c
+> namedRules = []
 
+> commuteConcs :: [Rule] -> [Rule]
+> commuteConcs rs = rs ++ do r <- rs
+>                            c <- commRules
+>                            cutRule c r
 
+> commuteAsmps :: [Rule] -> [Rule]
+> commuteAsmps rs = rs ++ do r <- rs
+>                            c <- commRules
+>                            cutRule r c
 
+> specSimple :: [Rule] -> [Rule]
+> specSimple rs = rs ++ filter (not . trivialRule)
+>                      (do r <- rs
+>                          c <- axiomSchemas ++ simpleRules
+>                          cutRule r c)
 
-> isFun :: Op -> Rule
-> isFun op  = aRule ("fun-" ++ show op) [ EqFun op x y z1, EqFun op x y z2 ]
->                                       (Rel Eq z1 z2)
->   where x : y : _ = srcOfVars V 0
->         z1 : _    = srcOfVars V 1
->         z2 : _    = srcOfVars V 2
+> makeSym :: [Rule] -> [Rule]
+> makeSym rs = rs ++ mapMaybe eqSym rs
 
 
 > srcOfVars :: (String -> Var) -> Integer -> [Term]
@@ -141,12 +158,24 @@ The rules
 >         version n x = x : show n
 
 
+> leqRules :: [Rule]
+> leqRules = foldr addRule []
+>          $ specSimple
+>          $ commuteAsmps
+>          $ map toSimpleRule
+>          [ aRule "add-leq"    [ x  +  y === z          ] (x <== z)
+>          , aRule "mul-leq"    [ x  *  y === z, 1 <== y ] (x <== z)
+>          , aRule "exp-leq-1"  [ x ^^^ y === z, 1 <== y ] (x <== z)
+>          , aRule "exp-leq-2"  [ x ^^^ y === z, 2 <== x ] (y <== z)
+>          ]
+>   where
+>   x : y : z : _ = srcOfVars V 0
 
 
 Definition schemas for basic functions and relations
 
 > axiomSchemas :: [Rule]
-> axiomSchemas =
+> axiomSchemas = map toSimpleRule
 >   [ axiom "def-add" (x  +  y === z)
 >   , axiom "def-mul" (x  *  y === z)
 >   , axiom "def-exp" (x ^^^ y === z)
@@ -154,77 +183,78 @@ Definition schemas for basic functions and relations
 >   ]
 >   where x : y : z : _ = srcOfVars NV 0
 
-
 > simpleRules :: [Rule]
-> simpleRules =
-
-<= Relation
-
+> simpleRules = commuteConcs $ map toSimpleRule $
 >   [ rule "leq-refl" (x <== x)
 >   , rule "leq-0"    (0 <== x)
->   ] ++
-
-Units
-
->   [ rule "add-0" (x  +  0  === x)
->   , rule "mul-1" (x  *  1  === x)
->   , rule "exp-1" (x ^^^ 1  === x)
->   -- 1 ^ x === 1
->   -- 0 ^ x === 0, 1 <= x
->   ] ++
-
-Anihilators
-
->   [ rule "mul-0" (x  *   0  === 0)
->   , rule "exp-0" (x ^^^  0  === 1)
+>   , rule "add-0"    (x  +  0  === x)
+>   , rule "mul-0"    (x  *  0  === 0)
+>   , rule "mul-1"    (x  *  1  === x)
+>   , rule "root-0"   (x ^^^ 0  === 1)
+>   , rule "root-1"   (x ^^^ 1  === x)
+>   , rule "log-1"    (1 ^^^ x  === 1)
 >   ]
+
+
+log_0 = (0 ^ x = y)  <=>  (y <= 1)
+
 >   where x : _ = srcOfVars V 0
 
 Commutativity
 
 > commRules :: [Rule]
-> commRules =
+> commRules = map toSimpleRule
 >   [ rule "add-comm" (x + y === y + x)
 >   , rule "mul-comm" (x * y === y * x)
 >   ]
 >   where x : y : _ = srcOfVars V 0
 
-(x + y1 = c, x + y2 = c) => y1 = y2
-
-
 
 > asmpRules :: [ Rule ]
 > asmpRules =
+>     foldr addRule [] $
+>     specSimple $
+>     funs ++
+>     map toSimpleRule (
+>     [ aRule "sub-L"     [ x1  +  y  === x2  +  y           ] (x1 === x2)
+>     , aRule "sub-R"     [ x   + y1  === x   +  y2          ] (y1 === y2)
+>     , aRule "div-L"     [ x1  *  y  === x2  *  y,  1 <== y ] (x1 === x2)
+>     , aRule "div-R"     [ x   * y1  === x   *  y2, 1 <== x ] (y1 === y2)
+>     , aRule "root"      [ x1 ^^^ y  === x2 ^^^ y,  1 <== y ] (x1 === x2)
+>     , aRule "log"       [ x  ^^^ y1 === x  ^^^ y2, 2 <== x ] (y1 === y2)
+>     , aRule "leq-asym"  [ x <== y, y <== x ]                 (x === y)
+>     , aRule "leq-trans" [ x <== y, y <== z ]                 (x <== z)
+>     ]
+>     )
+>   where
+>   x : x1 : x2 : y : y1 : y2 : z : z1 : z2 : _ = srcOfVars V 0
 >
->   -- Cancellation
->   [ aRule "sub" [ x1  +  y  === x2  +  y           ] (x1 === x2)
->   , aRule "div" [ x1  *  y  === x2  *  y,  1 <== y ] (x1 === x2)
->   , aRule "root"[ x1 ^^^ y  === x2 ^^^ y,  1 <== y ] (x1 === x2)
->   , aRule "log" [ x  ^^^ y1 === x  ^^^ y2, 2 <== x ] (y1 === y2)
+>   funs = do op <- [ Add, Mul, Exp ]
+>             return $ aRule ("fun-" ++ show op)
+>                    [Prop op [x,y,z1], Prop op [x,y,z2]]
+>                    (Prop Eq [z1,z2])
 >
->   -- Order
->   , aRule "leq-asym" [ x <== y, y <== x ] (x === y)
->   , aRule "leq-trans" [ x <== y, y <== z ] (x <== z)
->   ]
->   where x  : y  : z : _ = srcOfVars V 0
->         x1 : y1 : _     = srcOfVars V 1
->         x2 : y2 : _     = srcOfVars V 2
+
+
 
 
 > notSymRules :: [Rule]
-> notSymRules =
+> notSymRules = foldr addRule []
+>             $ specSimple
+>             $ map toSimpleRule
+>             $ makeSym
 >
 >   -- Associativity
 >   [ rule "add-assoc" $ (x + y) + z === x + (y + z)
 >   , rule "mul-assoc" $ (x * y) * z === x * (y * z)
->   {-
+>
 >   -- Distributivity
 >   , rule "add-mul" $ (x + y)  *  z === x  *  z + y *   z
 >   , rule "mul-exp" $ (x * y) ^^^ z === x ^^^ z * y ^^^ z
 >
 >   -- Exponentiation
 >   , rule "exp-add" $ x ^^^ (y + z)  === x ^^^ y * x ^^^ z
->   , rule "exp-mul" $ x ^^^ (y * z)  === (x ^^^ y) ^^^ z -}
+>   , rule "exp-mul" $ x ^^^ (y * z)  === (x ^^^ y) ^^^ z
 >   ]
 >   where x : y : z : _ = srcOfVars V 0
 
@@ -245,11 +275,12 @@ A1,A2 => B
 >   do let vs   = fvs rarg
 >          rfun = fresh vs rfun0
 >      (n,(asmp,rest)) <- zip [1 :: Integer .. ] $ choose (rAsmps rfun)
->      su <- match asmp (rConc rarg)
+>      su <- mgu asmp (rConc rarg)
 >      let rfun1 = apSubst su rfun { rAsmps = rest }
->      return rfun1 { rName  = RuleCut (rName rfun1) n (rName rarg)
->                   , rAsmps = rAsmps rarg ++ rAsmps rfun1
->                   , rSides = nub (rSides rarg ++ rSides rfun1)
+>          rarg1 = apSubst su rarg
+>      return rfun1 { rName  = RuleCut (rName rfun1) n (rName rarg1)
+>                   , rAsmps = rAsmps rarg1 ++ rAsmps rfun1
+>                   , rSides = nub (rSides rarg1 ++ rSides rfun1)
 >                   }
 
 
@@ -261,51 +292,10 @@ A => y = x
 
 > eqSym :: Rule -> Maybe Rule
 > eqSym r = case rConc r of
->             Rel Eq x y -> return r { rConc = Rel Eq y x
->                                    , rName = EqSym (rName r)
->                                    }
+>             Prop Eq [x,y] -> return r { rConc = Prop Eq [y,x]
+>                                        , rName = EqSym (rName r)
+>                                        }
 >             _ -> mzero
-
-A1 => x = y
-A2 => y = z
------------
-A1,A2 => x = z
-
-> {-
-> eqTrans :: Rule -> Rule -> [Rule]
-> eqTrans r1 r2 =
->   case (rConc r1, rConc r2) of
->     (Rel Eq _ y, Rel Eq _ _) ->
->       do let r2'@Rule { rConc = Rel Eq y' z' } = fresh (fvs r1) r2
->          su <- match y y'
->          let r1'@Rule { rConc = Rel Eq x' _ } = apSubst su r1
->          return Rule { rAsmps = rAsmps r1' ++ rAsmps r2'
->                      , rSides = rSides r1' ++ rSides r2'
->                      , rConc  = Rel Eq x' z'
->                      , rName  = EqTrans (rName r1') (rName r2')
->                      }
->
->     _ -> mzero
-> -}
-
-
-
-
-A1          => x = y
-A2, x = z   => P
---------------------
-A1,A2,y = z => P
-
-(a + b) + c = a + (b + c)
-(a + b) + c = d + c => (a + b) = d
-------------------------
-a + (b + c) = d + c => (a + b) = d
-
-
-
-
-
-
 
 
 ------------------------------------------------------------------------------
@@ -318,15 +308,7 @@ Substitution
 >   fvs     :: t -> [Var]
 >   apSubst :: Subst -> t -> t
 >   match   :: t -> t -> [Subst]
->
-> numV :: Var -> Bool
-> numV (NV _) = True
-> numV (V _)  = False
->
-> notNumV :: Var -> Bool
-> notNumV (V _) = True
-> notNumV (NV _)  = False
-
+>   mgu     :: t -> t -> [Subst]
 
 Merges two substitutions as long as they agree on all common variables.
 
@@ -374,6 +356,9 @@ Rename a variable so that it is different from a set of given names.
 >   match (a,b) (x,y) = do su1 <- match a x
 >                          su2 <- match b y
 >                          merge su1 su2
+>   mgu (a,b) (x,y)   = do su1 <- mgu a x
+>                          su2 <- mgu (apSubst su1 b) (apSubst su1 y)
+>                          return (compose su2 su1)
 
 > instance FVS a => FVS [a] where
 >   fvs         = unions . map fvs
@@ -382,6 +367,10 @@ Rename a variable so that it is different from a set of given names.
 >   match [] []         = return []
 >   match (x:xs) (y:ys) = match (x,xs) (y,ys)
 >   match _ _           = mzero
+>
+>   mgu [] []           = return []
+>   mgu (x:xs) (y:ys)   = mgu (x,xs) (y,ys)
+>   mgu _ _             = mzero
 
 
 > instance FVS Term where
@@ -407,24 +396,36 @@ Rename a variable so that it is different from a set of given names.
 >   match (App op1 s1 t1) (App op2 s2 t2)
 >     | op1 == op2 = match (s1,t1) (s2,t2)
 >   match _ _ = mzero
+>
+>   mgu (Var x) t = bindVar x t
+>   mgu t (Var x) = bindVar x t
+>   mgu (Const x) (Const y) | x == y  = return []
+>   mgu (App op1 s1 t1) (App op2 s2 t2)
+>     | op1 == op2 = mgu (s1,t1) (s2,t2)
+>   mgu _ _ = mzero
+
+> bindVar :: MonadPlus m => Var -> Term -> m Subst
+> bindVar x (Var y) | x == y      = return []
+> bindVar x t | x `elem` fvs t    = mzero
+> bindVar x@(NV {}) t | isNum t   = return [(x,t)]
+>                     | otherwise = mzero
+>   where isNum (Var (NV {})) = True
+>         isNum (Const _)     = True
+>         isNum _             = False
+> bindVar x t                   = return [(x,t)]
 
 
-> instance FVS Eqn where
->   fvs (EqFun _ t1 t2 t3) = fvs [ t1, t2, t3 ]
->   fvs (Rel _ t1 t2)      = fvs [ t1, t2 ]
+
+> instance FVS Prop where
+>   fvs (Prop _ ts)         = fvs ts
 >
->   apSubst su (EqFun op t1 t2 t3) = EqFun op (apSubst su t1)
->                                             (apSubst su t2)
->                                             (apSubst su t3)
->   apSubst su (Rel r t1 t2)       = Rel r (apSubst su t1) (apSubst su t2)
+>   apSubst su (Prop op ts) = Prop op (apSubst su ts)
 >
->   match (EqFun op t1 t2 t3) (EqFun op' t1' t2' t3') | op == op' =
->     match (t1,(t2,t3)) (t1', (t2',t3'))
->
->   match (Rel op t1 t2) (Rel op' t1' t2') | op == op' =
->     match (t1,t2) (t1',t2')
->
+>   match (Prop op ts) (Prop op' ts') | op == op' = match ts ts'
 >   match _ _ = mzero
+>
+>   mgu (Prop op ts) (Prop op' ts') | op == op' = mgu ts ts'
+>   mgu _ _ = mzero
 
 > instance FVS Rule where
 >   fvs r = fvs ((rAsmps r, rSides r), rConc r)
@@ -457,11 +458,18 @@ The resulting substitution contains the bindings of the pattern variables.
 
 Match two lists of equations, disregarding the order.
 
-> matchSet :: [Eqn] -> [Eqn] -> [Subst]
+> matchSet :: [Prop] -> [Prop] -> [Subst]
 > matchSet [] []      = return []
 > matchSet (x:xs) zs  = do (y,ys) <- choose zs
 >                          match (x,xs) (y,ys)
 > matchSet _ _        = mzero
+
+> mguSet :: [Prop] -> [Prop] -> [Subst]
+> mguSet [] []      = return []
+> mguSet (x:xs) zs  = do (y,ys) <- choose zs
+>                        mgu (x,xs) (y,ys)
+> mguSet _ _        = mzero
+
 
 
 do s <- match (A => B) (X => Y)
@@ -495,10 +503,11 @@ Example:
 a + b = c |- 1 + 2 = 3
 Fails, the first rule is not more general.
 
+> {-
 > exampleMatch :: [Subst]
 > exampleMatch = match
->                  (aRule "X" [EqFun Add i1 i2 i3]       (EqFun Add x y z))
->                  (aRule "Y" [EqFun Add a b c] (EqFun Add i1 i2 i3))
+>                  (aRule "X" [Prop Add i1 i2 i3]       (Prop Add x y z))
+>                  (aRule "Y" [Prop Add a b c] (Prop Add i1 i2 i3))
 >   where i1 : i2 : i3 : _ = map Const [ 1 .. ]
 >         a  : b  : c  : _ = map (Var . V . return) [ 'a' .. ]
 >         x  : y  : z  : _ = map (Var . V . return) [ 'x' .. ]
@@ -512,8 +521,8 @@ Fails.
 
 > exampleMatch2 :: [Subst]
 > exampleMatch2 = match
->                  (aRule "X" [EqFun Add i1 i2 i3]  (EqFun Add i1 i2 i3))
->                  (aRule "Y" [EqFun Add x y z]     (EqFun Add x y z))
+>                  (aRule "X" [Prop Add i1 i2 i3]  (Prop Add i1 i2 i3))
+>                  (aRule "Y" [Prop Add x y z]     (Prop Add x y z))
 >   where i1 : i2 : i3 : _ = map Const [ 1 .. ]
 >         x  : y  : z  : _ = map (Var . V . return) [ 'x' .. ]
 
@@ -526,10 +535,11 @@ Succeeds: [[(z,3),(y,2),(x,1)]]
 
 > exampleMatch3 :: [Subst]
 > exampleMatch3 = match
->                  (aRule "X" [EqFun Add x y z]    (EqFun Add i1 i2 i3))
->                  (aRule "Y" [EqFun Add i1 i2 i3] (EqFun Add i1 i2 i3))
+>                  (aRule "X" [Prop Add x y z]    (Prop Add i1 i2 i3))
+>                  (aRule "Y" [Prop Add i1 i2 i3] (Prop Add i1 i2 i3))
 >   where i1 : i2 : i3 : _ = map Const [ 1 .. ]
 >         x  : y  : z  : _ = map (Var . V . return) [ 'x' .. ]
+> -}
 
 
 > betterRuleThen :: Rule -> Rule -> Bool
@@ -641,20 +651,19 @@ Showing
 >   show (V x)  = x
 >   show (NV x) = "num_" ++ x
 >
-> instance Show Eqn where
->   show (EqFun op t1 t2 t3) = unwords [show t1, show op, show t2,"==",show t3]
->   show (Rel r t1 t2)       = unwords [show t1, show r, show t2]
+> instance Show Prop where
+>   show (Prop op [t1,t2,t3]) =
+>                             unwords [show t1, show op, show t2,"==",show t3]
+>   show (Prop r [t1,t2]) =  unwords [show t1, show r, show t2]
+>   show (Prop c ts)      = unwords (show c : map show ts)
 >
 > instance Show Op where
 >   show op = case op of
 >               Add -> "+"
 >               Mul -> "*"
 >               Exp -> "^"
->
-> instance Show Rel where
->   show r = case r of
->              Eq  -> "=="
->              Leq -> "<="
+>               Eq  -> "=="
+>               Leq -> "<="
 >
 > instance Show Term where
 >   show (Var x)        = show x
@@ -671,16 +680,6 @@ Showing
 >                     [] -> empty
 >                     ss -> text "//" <+> hsep (punctuate comma (map pp ss))
 
-
-
-Utilities for easy input
-
-> instance Num Term where
->   fromInteger = Const
->   x + y       = App Add x y
->   x * y       = App Mul x y
->   abs         = error "Term: abs"
->   signum      = error "Term: signum"
 
 
 
@@ -713,7 +712,7 @@ Utilities for easy input
 >                       }
 >                 return v
 >
-> addRel :: Rel -> Term -> Term -> M ()
+> addRel :: Op -> Term -> Term -> M ()
 > addRel r t1 t2 =
 >   do s <- get
 >      let su = eqs s
@@ -741,14 +740,16 @@ Utilities for easy input
 >           (Const 0, _) -> return ()
 >           (x, y) -> set $ s { leqs = (x,y) : leqs s }
 >
+>        _ -> error $ "bug: addRel, not a rel: " ++ show r
 >
-> run :: FVS a => M a -> (a, [Eqn])
+>
+> run :: FVS a => M a -> (a, [Prop])
 > run m =     (apSubst su a
 >             , do (t1,t2) <- leqs finS
->                  return $ apSubst su $ Rel Leq t1 t2
+>                  return $ apSubst su $ Prop Leq [t1,t2]
 >               ++
 >               do ((op,t1,t2), x) <- M.toList (known finS)
->                  return $ apSubst su $ EqFun op t1 t2 x
+>                  return $ apSubst su $ Prop op [t1,t2,x]
 >             )
 >   where (a,finS) = runS m initS
 >         su       = eqs finS
@@ -762,37 +763,31 @@ Utilities for easy input
 >                         t2' <- toSimple t2
 >                         getVar op t1' t2'
 >
-> toSimpleEqn :: Eqn -> M Eqn
-> toSimpleEqn (EqFun op t1 t2 t3) =
->   do x1 <- toSimple t1
->      x2 <- toSimple t2
->      x3 <- toSimple t3
->      return (EqFun op x1 x2 x3)
->
-> toSimpleEqn (Rel Eq (App op t1 t2) t3) = toSimpleEqn (EqFun op t1 t2 t3)
-> toSimpleEqn (Rel Eq t3 (App op t1 t2)) = toSimpleEqn (EqFun op t1 t2 t3)
->
-> toSimpleEqn (Rel r t1 t2) =
->   do x1 <- toSimple t1
->      x2 <- toSimple t2
->      return (Rel r x1 x2)
+> toSimpleProp :: Prop -> M Prop
+> toSimpleProp (Prop Eq [App op t1 t2, t3]) = toSimpleProp (Prop op [t1,t2,t3])
+> toSimpleProp (Prop Eq [t3, App op t1 t2]) = toSimpleProp (Prop op [t1,t2,t3])
+> toSimpleProp (Prop op ts) =
+>   do xs <- mapM toSimple ts
+>      return (Prop op xs)
 >
 >
-> addAsmp :: Eqn -> M ()
-> addAsmp eqn@(EqFun {}) =
->   do EqFun op x1 x2 x3 <- toSimpleEqn eqn
->      x4 <- getVar op x1 x2
->      addRel Eq x3 x4
->
-> addAsmp (Rel r t1 t2) =
+> addAsmp :: Prop -> M ()
+> addAsmp (Prop r [t1,t2]) | r `elem` [Eq,Leq] =
 >   do x1 <- toSimple t1
 >      x2 <- toSimple t2
 >      addRel r x1 x2
 >
+> addAsmp eqn@(Prop r _) | r `elem` [Add,Mul,Exp] =
+>   do Prop op [x1,x2,x3] <- toSimpleProp eqn
+>      x4 <- getVar op x1 x2
+>      addRel Eq x3 x4
+>
+> addAsmp _ = error "addAsmp: I don't know how to simplify this"
+
 >
 > toSimpleRule :: Rule -> Rule
 > toSimpleRule r = mk $ run $ do mapM_ addAsmp (rSides r ++ rAsmps r)
->                                toSimpleEqn (rConc r)
+>                                toSimpleProp (rConc r)
 >   where mk (x,y) = let ru = Rule { rName   = rName r
 >                                  , rAsmps  = y
 >                                  , rSides  = []   -- fixed in "normalize"
@@ -834,12 +829,12 @@ becomes
 x + 0 = x' | x == x'
 
 
-> data PatS = PatS { patEqns  :: [Eqn]            -- Equations between vars
+> data PatS = PatS { patProps  :: [Prop]            -- Equations between vars
 >                  , patKnown :: [Var]            -- Bound vars
 >                  }
 >
 > initPatS :: PatS
-> initPatS = PatS { patEqns = [], patKnown = [] }
+> initPatS = PatS { patProps = [], patKnown = [] }
 >
 > type PatM = State PatS
 >
@@ -853,7 +848,7 @@ x + 0 = x' | x == x'
 >        let m = patKnown s
 >            v1 = pickName m v
 >        when (v1 /= v) $
->          set s { patEqns = Rel Eq (Var v) (Var v1) : patEqns s }
+>          set s { patProps = Prop Eq [Var v, Var v1] : patProps s }
 >        sets_ $ \s1 -> s1 { patKnown = v1 : m }
 >        return v1
 >
@@ -865,14 +860,11 @@ x + 0 = x' | x == x'
 >   nonLin (Const x)     = return (Const x)
 >   nonLin (App op t1 t2)= App op `fmap` nonLin t1 `ap` nonLin t2
 >
-> instance NonLin Eqn where
->   nonLin (EqFun op t1 t2 t3) =
->                   EqFun op `fmap` nonLin t1 `ap` nonLin t2 `ap` nonLin t3
->   nonLin (Rel r t1 t2) = Rel r `fmap` nonLin t1 `ap` nonLin t2
+> instance NonLin Prop where
+>   nonLin (Prop op ts) = Prop op `fmap` mapM nonLin ts
 >
->
-> rmNonLin :: NonLin a => (a -> [Eqn] -> b) -> a -> b
-> rmNonLin k x = k a (patEqns finS)
+> rmNonLin :: NonLin a => (a -> [Prop] -> b) -> a -> b
+> rmNonLin k x = k a (patProps finS)
 >   where (a,finS) = runS m initPatS
 >         m        = nonLin x
 
@@ -908,13 +900,11 @@ Just x <- divide y 5
 
 
 
-> scDefs :: Eqn -> [ (Var, Defn) ]
-> scDefs (EqFun op x1 x2 x3) =
->   case op of
->     Add -> opList "minus"        "minus"       "(+)"
->     Mul -> opList "divide"       "divide"      "(*)"
->     Exp -> opList "descreteRoot" "descreteLog" "(^)"
->
+> scDefs :: Prop -> [ (Var, Defn) ]
+> scDefs (Prop op [x1,x2,x3])
+>   | Add <- op = opList "minus"        "minus"       "(+)"
+>   | Mul <- op = opList "divide"       "divide"      "(*)"
+>   | Exp <- op = opList "descreteRoot" "descreteLog" "(^)"
 >   where
 >   opList l r o =
 >     [ (x, Def True  l x3 x2) | Var x@(NV _) <- [x1] ] ++
@@ -933,11 +923,11 @@ Just x <- divide y 5
 They combine the existing assumptions with the new fact to derive more facts.
 
 > data FRule = FRule
->   { fPats   :: [ Eqn ]   -- Existing assumptions
->   , fAdding :: Eqn -- New assumption
+>   { fPats   :: Props -- Existing assumptions
+>   , fAdding :: Prop -- New assumption
 >   , fGuards :: [ Guard ]            -- Side congitions
 >   , fBoringGs :: [ Guard ]          -- Uninteresting equality side conditions
->   , fNew    :: Eqn -- Derived fact
+>   , fNew    :: Prop -- Derived fact
 >   , fNotes  :: Doc
 >   }
 
@@ -945,10 +935,10 @@ They combine the existing assumptions with the new fact to derive more facts.
 "Backward" rules are used to solve a goal, from a set of assumptions.
 
 > data BRule = BRule
->   { bPats     :: [ Eqn ] -- Existing assumptions
+>   { bPats     :: [ Prop ] -- Existing assumptions
 >   , bGuards   :: [ Guard ]          -- Side conditions
 >   , bBoringGs :: [ Guard ]          -- Uninteresting equality side conditions
->   , bNew      :: Eqn -- Fact that can be solved
+>   , bNew      :: Prop -- Fact that can be solved
 >   , bNotes    :: Doc
 >   }
 
@@ -957,7 +947,7 @@ something.  They differ from other equations in that we don't need to match
 them against existing assumptions, because they do not contain unbaound
 variables.
 
-> data Guard = GBool Eqn | GPat Var Defn
+> data Guard = GBool Prop | GPat Var Defn
 >   deriving Eq
 >
 > instance FVS Guard where
@@ -983,9 +973,9 @@ variables.
 
 > instance NonLin FRule where
 >   nonLin r =
->     do ps <- nonLin (fPats r)
+>     do ps <- nonLin (propsToList (fPats r))
 >        a  <- nonLin (fAdding r)
->        return r { fPats = ps, fAdding = a }
+>        return r { fPats = propsFromList ps, fAdding = a }
 >
 > instance NonLin BRule where
 >   nonLin r =
@@ -1021,7 +1011,7 @@ P(Y)
 
 
 
-> resolveGuards :: [Var] -> [Var] -> [Eqn] -> Maybe [Guard]
+> resolveGuards :: [Var] -> [Var] -> [Prop] -> Maybe [Guard]
 > resolveGuards def0 needDef0 gs0 =
 >   listToMaybe (loop def0 needDef0 [] [] False gs0)
 >   where
@@ -1058,19 +1048,19 @@ construct a new fact "p".  All the variables in "p" should
 be defined in terms of variables in "R" and "r".
 
 
-> toFRule' :: Rule -> [(Eqn, Rule)]
+> toFRule' :: Rule -> [(Prop, Rule)]
 > toFRule' r =
 >   foldr addFRule [] $
 >   do (x,xs) <- choose (rAsmps r)
 >      return (x, r { rAsmps = xs })
 >
-> sameFRule :: [Var] -> (Eqn, Rule) -> (Eqn,Rule) -> Bool
+> sameFRule :: [Var] -> (Prop, Rule) -> (Prop,Rule) -> Bool
 > sameFRule vs1 f1 f2' =
 >   let f2@(e2,r2) = fresh vs1 f2'
 >   in not $ null $ match f1 f2 ++
 >                   ((\z -> match f1 (e2,z)) =<< maybeToList (eqSym r2))
 >
-> addFRule :: (Eqn,Rule) -> [(Eqn,Rule)] -> [(Eqn,Rule)]
+> addFRule :: (Prop,Rule) -> [(Prop,Rule)] -> [(Prop,Rule)]
 > addFRule x xs = if any (sameFRule (fvs x) x) xs then xs else x : xs
 
 
@@ -1082,7 +1072,7 @@ be defined in terms of variables in "R" and "r".
 >                          (fvs (rConc r1))
 >                          (rSides r1)
 >
->      return FRule { fPats   = rAsmps r1
+>      return FRule { fPats   = propsFromList (rAsmps r1)
 >                   , fAdding = e
 >                   , fBoringGs  = []
 >                   , fGuards = gs
@@ -1096,7 +1086,7 @@ be defined in terms of variables in "R" and "r".
 Convert a rule into one suitable for backward reasoning (i.e., solving things).
 
 > toBRule :: Rule -> [BRule]
-> toBRule (Rule { rConc = Rel Eq _ _ }) = []  -- we relay on frules to fire
+> toBRule (Rule { rConc = Prop Eq _ }) = []  -- we relay on frules to fire
 > toBRule r =
 >   do let y      = rConc r
 >          guards = rSides r
@@ -1165,13 +1155,16 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 
 
 > termToPat :: Term -> Pat
-> termToPat (Var x) | notNumV x  = text (show x)
-> termToPat t                     = parens (numPat (text (show t)))
+> termToPat (Var x) | not (numV x)  = text (show x)
+> termToPat t                       = parens (numPat (text (show t)))
 >
-> eqnToPat :: Eqn -> Pat
-> eqnToPat (EqFun op t1 t2 t3) =
->   conPat "EqFun" (conPat (opCon op) [] : map termToPat [t1, t2, t3])
-> eqnToPat (Rel r t1 t2) = conPat (relCon r) (map termToPat [t1,t2])
+> eqnToPat :: Prop -> Pat
+> eqnToPat (Prop op ts)
+>   | op `elem` [Add,Mul,Exp] = conPat "EqFun" (conPat con [] : pats)
+>   | op `elem` [Leq,Eq]      = conPat con pats
+>   | otherwise               = error "bug eqnToPat: unknown predicate"
+>   where con   = opCon op
+>         pats  = map termToPat ts
 >
 > opCon :: Op -> String
 > opCon op =
@@ -1179,28 +1172,25 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >     Add -> "Add"
 >     Mul -> "Mul"
 >     Exp -> "Exp"
+>     Leq -> "Leq"
+>     Eq  -> "Eq"
 >
-> relCon :: Rel -> String
-> relCon r =
->   case r of
->    Leq -> "Leq"
->    Eq  -> "Eq"
->
-> eqnsToPat :: [Eqn] -> Pat
+> eqnsToPat :: [Prop] -> Pat
 > eqnsToPat es  = listPat (map eqnToPat es)
 >
 > toExpr :: Term -> Doc
 > toExpr t =
 >   case t of
->     Var x | notNumV x -> text (show x)
+>     Var x | not (numV x) -> text (show x)
 >     _ -> parens (text "num" <+> text (show t))
 >
-> eqnToExpr :: Eqn -> Doc
-> eqnToExpr (EqFun op t1 t2 t3) =
->   parens $ text "EqFun" <+> text (opCon op) <+> toExpr t1 <+> toExpr t2 <+>
->                                                               toExpr t3
-> eqnToExpr (Rel r t1 t2) =
->   parens $ text (relCon r) <+> toExpr t1 <+> toExpr t2
+> eqnToExpr :: Prop -> Doc
+> eqnToExpr (Prop op ts) = parens (fun <+> hsep (map toExpr ts))
+>   where
+>   fun | op `elem` [Add,Mul,Exp] = text "EqFun" <+> con
+>       | op `elem` [Leq,Eq]      = con
+>       | otherwise               = error "bug: eqnToExp, unknown pred"
+>   con = text (opCon op)
 >
 >
 > bruleToAlt :: BRule -> Doc
@@ -1212,7 +1202,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > fruleToFun :: String -> FRule -> Doc
 > fruleToFun nm r =
 >   ptext "{-" <+> fNotes r <+> text "-}" $$
->   (name <+> eqnsToPat (fPats r) <+> parens (eqnToPat (fAdding r)))
+>   (name <+> eqnsToPat (propsToList (fPats r)) <+> parens (eqnToPat (fAdding r)))
 >      $$ (nest 2 (ppGuards (fBoringGs r) (fGuards r)
 >           <+> text "=" <+> text "Just" <+> eqnToExpr (fNew r)))
 >      $$ name <+> text "_ _ = Nothing"
@@ -1247,6 +1237,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >   $$ vcat (map (ppStats "solve") solveFuns)
 >   $$ text "--"
 >   $$ vcat (map (ppStats "frule") frules)
+>   $$ newStats
 >   $$ text "--"
 >   $$ text "-- Back rules"
 >   $$ vsep (map solveFun solveFuns)
@@ -1255,9 +1246,11 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >   where
 >   (frs,brs) = solverRules
 >   solveFuns = groupLens bPats brs
->   frules    = groupLens fPats frs
+>   frules    = groupLens (propsToList . fPats) frs
 >   ppStats x (n,as)  = text "--" <+> text x <> int n
 >                       <+> int (length as) <+> text "cases"
+>   newStats = vcat $ map cvt $ group $ sort $ map (propsSig . fPats) frs
+>     where cvt xs  = text "--" <+> text (head xs) <+> parens (int (length xs))
 >
 > vsep :: [Doc] -> Doc
 > vsep = vcat . intersperse (text " ")
@@ -1268,15 +1261,6 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >         comp = comparing fst
 >         same x y = comp x y == EQ
 >         rearrange xs = (fst (head xs), map snd xs)
-
-
-
-> nth_product :: Int -> [a] -> [[a]]
-> nth_product n xs | n <= 1     = do x <- xs
->                                    return [x]
->                  | otherwise  = do (x,ys) <- choose xs
->                                    zs <- nth_product (n-1) ys
->                                    return (x : zs)
 
 
 
@@ -1305,6 +1289,43 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >
 > sets_ :: (s -> s) -> State s ()
 > sets_ f = St (\s -> ((), f s))
+
+--------------------------------------------------------------------------------
+
+The "signature" of an frule is a sequence of number which records how
+many of each type of proposition are needed by the rule, in the
+following order  Add, Mul, Exp, Leq.  So, for example, the signature
+"2_0_0_0" is a rule which has two "Add" patterns and no other patterns.
+
+To check if such (frule) fires 
+
+do [ p1, p2 ] <- nth_product 2 (pAdd props)
+   return (rule RHS)
+
+> type Props = M.Map Op [[Term]]
+>
+> propsSig :: Props -> String
+> propsSig ps = concat $ intersperse "_" $ map show [ len o | o <- ops ]
+>   where ops = [ Add, Mul, Exp, Leq, Eq ]
+>         len x = case M.lookup x ps of
+>                   Just ts -> length ts
+>                   Nothing -> 0
+>
+> noProps :: Props
+> noProps = M.empty
+>
+> addProp :: Prop -> Props -> Props
+> addProp (Prop op ts) props = M.insertWith (++) op [ts] props
+>
+> propsToList :: Props -> [Prop]
+> propsToList props = do (op,tss) <- M.toList props
+>                        ts       <- tss
+>                        return (Prop op ts)
+>
+> propsFromList :: [Prop] -> Props
+> propsFromList = foldr addProp noProps
+
+
 
 
 
