@@ -152,13 +152,8 @@ have a constradiction and hence the propositions would not be consistent,
 and if we ontained \Verb"YesIf", then then the proposition would
 be redundant and hence may be eliminated.  The predicate makes use
 of the auxiliary function \Verb"choose", which extracts a single
-element from a list in all possible ways:
+element from a list in all possible ways.
 
-\begin{code}
-choose :: [a] -> [(a,[a])]
-choose []     = []
-choose (x:xs) = (x,xs) : [ (y, x:ys) | (y,ys) <- choose xs ]
-\end{code}
 
 
 
@@ -402,6 +397,155 @@ enatils_all_prop p ps q =
     _         -> True
 \end{code}
 
+\begin{code}
+simpleEntails :: Prop -> Answer
+simpleEntails p =
+  case p of
+    Eq x y ->
+      case mgu x y of
+        Just su
+          | not (p `elem` eqns) -> YesIf eqns
+          | otherwise           -> NotForAll
+          where eqns = substToEqns su
+        Nothing -> NotForAny
+
+    Leq x y
+      | Num 0 _ <- x                -> YesIf []
+      | Num 0 _ <- y                -> YesIf [ Eq x (num 0) ]
+      | Num m _ <- x, Num n _ <- y  -> if m <= n then YesIf [] else NotForAny
+      | x == y                      -> YesIf []
+      | otherwise                   -> NotForAll
+
+    EqFun Add x y z
+      | Num 0 _ <- x                -> YesIf [ Eq y z ]
+      | Num 0 _ <- y                -> YesIf [ Eq x z ]
+      | Num 0 _ <- z                -> YesIf [ Eq x (num 0), Eq y (num 0) ]
+      | Num m _ <- x, Num n _ <- y  -> YesIf [ Eq z (num (m + n)) ]
+      | Num m _ <- x, Num n _ <- z  -> case minus n m of
+                                         Just r   -> YesIf [ Eq y (num r) ]
+                                         Nothing  -> NotForAny
+      | Num m _ <- y, Num n _ <- z  -> case minus n m of
+                                         Just r   -> YesIf [ Eq x (num r) ]
+                                         Nothing  -> NotForAny
+      | x == z                      -> YesIf [ Eq y (num 0) ]
+      | y == z                      -> YesIf [ Eq x (num 0) ]
+      | x == y                      -> YesIf [ EqFun Mul x (num 2) z ]
+      | Num _ _ <- y                -> YesIf [ EqFun Add y x z ] -- const on L
+      | otherwise                   -> NotForAll
+
+    EqFun Mul x y z
+      | Num 0 _ <- x                -> YesIf [ Eq z (num 0) ]
+      | Num 0 _ <- y                -> YesIf [ Eq z (num 0) ]
+      | Num 1 _ <- x                -> YesIf [ Eq y z ]
+      | Num 1 _ <- y                -> YesIf [ Eq x z ]
+      | Num 1 _ <- z                -> YesIf [ Eq x (num 1), Eq y (num 1) ]
+
+      | Num m _ <- x, Num n _ <- y  -> YesIf [ Eq z (num (m * n)) ]
+      | Num m _ <- x, Num n _ <- z  -> case divide n m of
+                                         Just r   -> YesIf [ Eq y (num r) ]
+                                         Nothing  -> NotForAny
+      | Num m _ <- y, Num n _ <- z  -> case divide n m of
+                                         Just r   -> YesIf [ Eq x (num r) ]
+                                         Nothing  -> NotForAny
+      | x == y                      -> YesIf [ EqFun Exp x (num 2) z ]
+      | Num _ _ <- y                -> YesIf [ EqFun Mul y x z ] -- const on L
+      | otherwise                   -> NotForAll
+
+    EqFun Exp x y z
+      | Num 0 _ <- x                -> YesIf [ Leq z (num 1) ]
+      | Num 0 _ <- y                -> YesIf [ Eq z (num 1) ]
+      | Num 0 _ <- z                -> YesIf [ Eq x (num 0), Leq (num 1) y ]
+      | Num 1 _ <- x                -> YesIf [ Eq z (num 1) ]
+      | Num 1 _ <- y                -> YesIf [ Eq x z ]
+
+      | Num m _ <- x, Num n _ <- y  -> YesIf [ Eq z (num (m ^ n)) ]
+      | Num m _ <- x, Num n _ <- z  -> case descreteLog m n of
+                                         Just r   -> YesIf [ Eq y (num r) ]
+                                         Nothing  -> NotForAny
+      | Num m _ <- y, Num n _ <- z  -> case descreteRoot m n of
+                                         Just r   -> YesIf [ Eq x (num r) ]
+                                         Nothing  -> NotForAny
+      | x == z                      -> YesIf [ Eq x (num 1), Eq z (num 1) ]
+      | y == z                      -> YesIf [ Eq x (num 1), Eq y (num 1),
+                                                             Eq z (num 1) ]
+      | otherwise                   -> NotForAll
+\end{code}
+
+\begin{code}
+extend0 prop =
+  case prop of
+    EqFun Add x y z           -> return [ Leq x z, Leq y z, EqFun Add y x z ]
+    EqFun Mul x y z
+      | Num m _ <- x, 1 <= m  -> return [ Leq y z, EqFun Mul y x z ]
+      | otherwise             -> return [ EqFun Mul y x z ]
+    EqFun Exp x y z
+      | Num m _ <- x, 2 <= m  -> return [ Leq y z ]
+      | Num m _ <- y, 1 <= m  -> return [ Leq x z ]
+    _                         -> return []
+
+
+extend1 :: Prop -> Prop -> Maybe [Prop]
+extend1 asmp prop =
+  case prop of
+
+    Leq x y
+      | Leq a (Num m _) <- prop, Num n _ <- x, m <= n -> return [ Leq a y ]
+      | Leq (Num m _) a <- prop, Num n _ <- y, n <= m -> return [ Leq y a ]
+      | Leq y' z        <- prop, y == y'              -> return [ Leq x z ]
+      | Leq a x'        <- prop, x == x'              -> return [ Leq a y ]
+      | Leq y' x'       <- prop, x == x', y == y'     -> return [ Eq x y ]
+
+    EqFun Add x y z
+      | EqFun Add x' y' z' <- prop, x == x', y == y'  -> return [ Eq z z' ]
+      | EqFun Add x' y' z' <- prop, x == x', z == z'  -> return [ Eq y y' ]
+      | EqFun Add x' y' z' <- prop, y == y', z == z'  -> return [ Eq x x' ]
+
+    EqFun Mul x y z
+      | EqFun Mul x' y' z' <- prop, x == x', y == y'  -> return [ Eq z z' ]
+
+    EqFun Mul (Num m _) y z
+      | EqFun Mul (Num m' _) y' z' <- prop, 1 <= m, m == m', z == z'
+                                                      -> return [ Eq y y' ]
+
+    EqFun Exp x y z
+      | EqFun Exp x' y' z' <- prop, x == x', y == y'  -> return [ Eq z z' ]
+
+    EqFun Exp (Num m _) y z
+      | EqFun Exp (Num m' _) y' z' <- prop, 2 <= m, m == m', z == z'
+                                                      -> return [ Eq y y' ]
+    EqFun Exp x (Num m _) z
+      | EqFun Exp x' (Num m' _) z' <- prop, 1 <= m, m == m', z == z'
+                                                      -> return [ Eq x x' ]
+
+    -- 5 + x = y & 7 + x = z  --> 2 + y = z
+    EqFun Add (Num m _) y z
+      | EqFun Add (Num n _) y' z' <- prop, y == y' ->
+        if m >= n then return [ EqFun Add (num (m - n)) z' z ]
+                  else return [ EqFun Add (num (n - m)) z z' ]
+
+    -- 5 + x = y & 7 + y = z   --> 13 + x = z
+    EqFun Add (Num m _) x y
+      | EqFun Add (Num n _) y' z <- prop, y == y' ->
+                                        return [ EqFun Add (num (m + n)) x z ]
+
+    EqFun Add (Num n _) y' z
+      | EqFun Add (Num m _) x y <- prop, y == y' ->
+                                        return [ EqFun Add (num (m + n)) x z ]
+
+{-
+    EqFun Add x y (Num m _)
+      | EqFun Add x' y' (Num n _)
+
+
+    -- x + y = 5, x + y' = 7 --> y + 2 = y'
+
+    -- x + y + 2 = x + y'
+-}
+    _ -> return []
+
+
+
+\end{code}
 
 \begin{code}
 entails ps p | tr "entails?:" ps
@@ -412,18 +556,21 @@ entails ps' p' =
     Nothing -> error "bug: Inert invariant failed!"
     Just (su,ps) ->
       let p = apSubst su p'
-      in if solve ps p
-           then trace "yes!" $ YesIf []
-           else trace "try improvement" $
-                case closure (p:ps) of
-                  Nothing -> trace "definately not" NotForAny
-                  Just (su1,_)
-                    | solve (apSubst su1 ps) (apSubst su1 p)
-                   && not (p' `elem` eqns) ->
-                        trace "yes!" YesIf eqns
-                    | p == p'   -> trace "no" NotForAll
-                    | otherwise -> YesIf [p]
-                    where eqns = substToEqns su1
+      in {-case simpleEntails p of
+           NotForAll -> -}
+                       if solve ps p
+                          then trace "yes!" $ YesIf []
+                          else trace "try improvement" $
+                               case closure (p:ps) of
+                                 Nothing -> trace "definately not" NotForAny
+                                 Just (su1,_)
+                                   | solve (apSubst su1 ps) (apSubst su1 p)
+                                  && not (p' `elem` eqns) ->
+                                       trace "yes!" YesIf eqns
+                                   | p == p'   -> trace "no" NotForAll
+                                   | otherwise -> YesIf [p]
+                                   where eqns = substToEqns su1
+           -- res -> res
 
 
 
@@ -465,9 +612,9 @@ solve :: [Prop] -> Prop -> Bool
 solve  _ (Eq x y) | x == y = True
 solve asmps prop =
       solve0 [] prop
-   || any (`solve1` prop) p1
-   || any (`solve2` prop) p2
-   || any (`solve3` prop) p3
+   || (prop `elem` asmps) -- any (`solve1` prop) p1
+   -- || any (`solve2` prop) p2
+   -- || any (`solve3` prop) p3
    -- || any (`solve4` prop) p4
 
   where
@@ -475,15 +622,15 @@ solve asmps prop =
 
 
 implied :: [Prop] -> Prop -> [Prop]
-implied asmps prop =
+implied asmps prop = -- frule
   frule0 [] prop ++
   concatMap (`frule1` prop) p1 ++
-  concatMap (`frule2` prop) p2 {- ++
-  concatMap (`frule3` prop) p3 ++
+  concatMap (`frule2` prop) p2 ++
+  concatMap (`frule3` prop) p3 {- ++
   concatMap (`frule4` prop) p4 ++
   concatMap (`frule5` prop) p5 -}
   where
-  p1 : p2 : p3 : p4 : p5 : _ = map (`nth_product` asmps) [ 1 .. ]
+  p1 : p2 : p3 : _ {- p4 : p5 : _ -} = map (`nth_product` asmps) [ 1 .. ]
 
 \end{code}
 
@@ -515,7 +662,6 @@ isNotForAll _         = False
 isYesIf :: Answer -> Bool
 isYesIf (YesIf _)     = True
 isYesIf _             = False
-
 
 \end{code}
 

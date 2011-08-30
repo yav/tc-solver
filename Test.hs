@@ -3,6 +3,7 @@
 module Test where
 
 import Data.Maybe(catMaybes)
+import Control.Monad(mzero)
 
 type Xi = String
 
@@ -61,6 +62,34 @@ divide _ 0  = Nothing
 divide x y  = case divMod x y of
                 (a,0) -> Just a
                 _     -> Nothing
+
+choose :: [a] -> [(a,[a])]
+choose []     = []
+choose (x:xs) = (x,xs) : [ (y, x:ys) | (y,ys) <- choose xs ]
+
+type Terms2 = (Term,Term)
+type Terms3 = (Term,Term,Term)
+data Props  = Props { pAdd :: [Terms3]
+                    , pMul :: [Terms3]
+                    , pExp :: [Terms3]
+                    , pLeq :: [Terms2]
+                    , pEq  :: [Terms2]   -- or just Subst?
+                    }
+
+noProps :: Props
+noProps = Props [] [] [] [] []
+
+addProp :: Prop -> Props -> Props
+addProp prop props =
+  case prop of
+    EqFun Add t1 t2 t3 -> props { pAdd = (t1,t2,t3) : pAdd props }
+    EqFun Mul t1 t2 t3 -> props { pMul = (t1,t2,t3) : pMul props }
+    EqFun Exp t1 t2 t3 -> props { pExp = (t1,t2,t3) : pExp props }
+    Leq t1 t2          -> props { pLeq = (t1,t2)    : pLeq props }
+    Eq t1 t2           -> props { pEq  = (t1,t2)    : pEq props }
+
+
+
 
 
 #include "TcTypeNatsRules.hs"

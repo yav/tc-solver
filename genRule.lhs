@@ -28,6 +28,11 @@ Terms and Propositions
 >
 > data Op     = Add | Mul | Exp | Eq | Leq
 >               deriving (Eq,Ord)
+>
+> arity :: Op -> Int
+> arity op | op `elem` [Add,Mul,Exp]  = 3
+>          | op `elem` [Eq,Leq]       = 2
+>          | otherwise                = error "bug: arity, unknown op"
 
 
 
@@ -1166,6 +1171,9 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >   where con   = opCon op
 >         pats  = map termToPat ts
 >
+> eqnToPatNoCon :: Prop -> [Pat]
+> eqnToPatNoCon (Prop _ ts) = map termToPat ts
+>
 > opCon :: Op -> String
 > opCon op =
 >   case op of
@@ -1214,7 +1222,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > fruleFun (n,fs) = text "frule" <> int n <+> text " :: [Prop] -> Prop -> [Prop]" $$
 >               text "frule" <> int n <+> text "asmps" <+> text "new"
 >                 <+> text "=" <+> text "catMaybes"
->                       $$ nest 2 (brackets (fsep $ punctuate comma aux))
+>                       $$ nest 2 (ppList aux)
 >   $$ nest 2 (text "where" $$ vsep defs)
 >   where
 >   nameDef x f = let name = "try_" ++ show x
@@ -1238,6 +1246,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >   $$ text "--"
 >   $$ vcat (map (ppStats "frule") frules)
 >   $$ newStats
+>   $$ codeFRules groupedFs
 >   $$ text "--"
 >   $$ text "-- Back rules"
 >   $$ vsep (map solveFun solveFuns)
@@ -1249,9 +1258,136 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >   frules    = groupLens (propsToList . fPats) frs
 >   ppStats x (n,as)  = text "--" <+> text x <> int n
 >                       <+> int (length as) <+> text "cases"
->   newStats = vcat $ map cvt $ group $ sort $ map (propsSig . fPats) frs
->     where cvt xs  = text "--" <+> text (head xs) <+> parens (int (length xs))
+>   groupedFs = groupFRules frs
+>   newStats = vcat $ map ppNewStats $ M.toList groupedFs
+
+> groupFRules :: [FRule] -> M.Map Op (M.Map String [FRule])
+> groupFRules frs = M.map byAsmps (foldr addHead M.empty frs)
+>   where
+>   hd (Prop h _) = h
+>   addHead f     = M.insertWith (++) (hd (fAdding f)) [f]
+>   byAsmps       = foldr addAsmps M.empty
+>   addAsmps f    = M.insertWith (++) key [f]
+>     where key   = propsSig (fPats f)
 >
+> ppNewStats (k, m) = text "--" <+> text (show k)
+>                  $$ vcat (map pp (M.toList m))
+>   where pp (s,fs) = text "--  " <+> text s <+> int (length fs)
+
+--------------------------------------------------------------------------------
+
+
+The code bellow generates functions of this form:
+
+-- Used when the new fact is (Add t1 t2 t3), and the assumptions
+-- have 2 Add, and 1 Mul.
+frule_Add_2_1_0_0_0 t1 t2 t3 =
+  do ((x0,x1,x2),add1) <- choose (pAdd props)
+     (x3,x4,x5)        <- add1
+     (x6,x7,x8)        <- pMul props
+     concat [ case (t1,t2,t3,x0,x1,x2,x3,..)
+                  (q1,q2,q3,p0,p1,p2,p3,...)
+                    | sides -> [ rhs ]
+                  _         -> []
+            , case ...
+            ]
+
+
+> codeFRules :: M.Map Op (M.Map String [FRule]) -> Doc
+> codeFRules m =
+>   text "frule :: Props -> Prop -> [Prop]" $$
+>   text "frule props newProp = case newProp of" $$
+>   nest 2 (vcat (map cases (M.toList m)) $$ text "_ -> []")
+>   where
+>   cases (op,m1) =
+>     let eqn = Prop op (take ar $ map (Var . V . fruleVar) [ 0 .. ])
+>         ar  = arity op
+>     in eqnToPat eqn <+> text "->" <+> text "concat"
+>        $$ nest 2 (ppList
+>                  $ do (_,rs) <- M.toList m1
+>                       return $ text "do" <+>
+>                         ( codeMatchProps ar (fPats (head rs))
+>                           $$ text "concat" <+> ppList (map fruleCase rs)
+>                         )
+>                  )
+
+
+> ppTup :: [Doc] -> Doc
+> ppTup = parens . hsep . punctuate comma
+
+> ppList :: [Doc] -> Doc
+> ppList [] = text "[]"
+> ppList (x : xs) = (text "[" <+> x) $$
+>                   vcat [ comma <+> y | y <- xs ] $$
+>                   text "]"
+
+> fruleOrder :: [Op]
+> fruleOrder = [ Add, Mul, Exp, Leq, Eq ]
+>
+> fruleVar :: Int -> String
+> fruleVar n  = "arg" ++ show n
+>
+> fruleAsmpsName = text "props"
+>
+> fruleCase :: FRule -> Doc
+> fruleCase r =
+>      ptext "{-" <+> fNotes r <+> text "-}"
+>   $$ text "case" <+> vars <+> text "of"
+>   $$ nest 2 ( ppTup pats $$ nest 2 (ppGuards (fBoringGs r) (fGuards r)
+>                             <+> text "-> return" <+> eqnToExpr (fNew r))
+>               $$ text "_ -> mzero"
+>             )
+>   where
+>   vars       = ppTup $ take (length pats) $ map (text . fruleVar) [ 0 .. ]
+>   pats       = map termToPat $ addPs ++ concatMap getPats fruleOrder
+>   addPs      = case fAdding r of
+>                  Prop _ ts -> ts
+>   getPats op = case M.lookup op (fPats r) of
+>                  Nothing  -> []
+>                  Just ts  -> concat ts
+
+
+Generates code search for assumptions of the appropriate "shape"
+(i.e., just based on the predicate, not the predicate's arguments.)
+
+> codeMatchProps :: Int -> Props -> Doc
+> codeMatchProps ar0 m = vcat $ snd $ mapAccumL doOp ar0 fruleOrder
+>   where
+>   doOp vs op = case M.lookup op m of
+>                  Nothing -> (vs, empty)
+>                  Just ts -> step op (length ts) vs
+>
+>   step op howMany vars0 = gen howMany initSrc vars0
+>     where
+>     initSrc   = parens (char 'p' <> name <+> fruleAsmpsName)
+>     nextSrc n = text "more" <> name <> int (howMany - n + 1)
+>
+>     pats n = ppTup $ take ar [ text (fruleVar v) | v <- [ n .. ] ]
+>
+>     gen 0 _   vs = (vs, empty)
+>     gen 1 src vs = (vs + ar, pats vs <+> text "<-" <+> src)
+>     gen n src vs = let newSrc = nextSrc n
+>                        (vs1, stmts) = gen (n-1) newSrc (vs+ar)
+>                    in ( vs1
+>                       , parens (pats vs <> comma <> newSrc) <+>
+>                           text "<-" <+> text "choose" <+> src $$ stmts
+>                       )
+>     ar    = arity op
+>     name  = text (opTextName op)
+
+> opTextName op = case op of
+>                   Add -> "Add"
+>                   Mul -> "Mul"
+>                   Exp -> "Exp"
+>                   Leq -> "Leq"
+>                   Eq  -> "Eq"
+
+
+--------------------------------------------------------------------------------
+
+
+
+
 > vsep :: [Doc] -> Doc
 > vsep = vcat . intersperse (text " ")
 >
@@ -1304,13 +1440,6 @@ do [ p1, p2 ] <- nth_product 2 (pAdd props)
 
 > type Props = M.Map Op [[Term]]
 >
-> propsSig :: Props -> String
-> propsSig ps = concat $ intersperse "_" $ map show [ len o | o <- ops ]
->   where ops = [ Add, Mul, Exp, Leq, Eq ]
->         len x = case M.lookup x ps of
->                   Just ts -> length ts
->                   Nothing -> 0
->
 > noProps :: Props
 > noProps = M.empty
 >
@@ -1326,7 +1455,14 @@ do [ p1, p2 ] <- nth_product 2 (pAdd props)
 > propsFromList = foldr addProp noProps
 
 
-
+>
+> propsSig :: Props -> String
+> propsSig ps = concat $ intersperse "_" $ map show [ len o | o <- ops ]
+>   where ops = [ Add, Mul, Exp, Leq, Eq ]
+>         len x = case M.lookup x ps of
+>                   Just ts -> length ts
+>                   Nothing -> 0
+>
 
 
 
