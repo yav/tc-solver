@@ -35,21 +35,21 @@ When working with collections of properties, it is convenient to group
 the assumptions and goals separately:
 
 \begin{code}
-data PropSet = PropSet { given :: [Prop], wanted :: [Prop] }
+data PropSet = PropSet { given :: Props, wanted :: Props }
 
 emptyPropSet :: PropSet
-emptyPropSet = PropSet { given = [], wanted = [] }
+emptyPropSet = PropSet { given = noProps, wanted = noProps }
 
 insertGiven :: Prop -> PropSet -> PropSet
-insertGiven g ps = ps { given = g : given ps }
+insertGiven g ps = ps { given = addProp g (given ps) }
 
 insertWanted :: Prop -> PropSet -> PropSet
-insertWanted w ps = ps { wanted = w : wanted ps }
+insertWanted w ps = ps { wanted = addProp w (wanted ps) }
 
 unionPropSets :: PropSet -> PropSet -> PropSet
-unionPropSets ps1 ps2 = PropSet { given  = given ps1  ++ given ps2
-                             , wanted = wanted ps1 ++ wanted ps2
-                             }
+unionPropSets ps1 ps2 = PropSet { given  = unionProps (given ps1) (given ps2)
+                                , wanted = unionProps (wanted ps1) (wanted ps2)
+                                }
 \end{code}
 
 
@@ -60,7 +60,7 @@ if a set of assumptions (the first argument), entail a certain proposition
 (the second argument).
 
 \begin{code}
-entails :: [Prop] -> Prop -> Answer
+entails :: Props -> Prop -> Answer
 \end{code}
 
 The entailment function may return one of three possible answers,
@@ -138,8 +138,8 @@ invariant of the inert set:
 \begin{code}
 inert_prop :: InertSet -> Bool
 inert_prop props = all (isNotForAll . uncurry entails) $
-  [ (gs, g)                | (g,gs) <- choose (given props)  ] ++
-  [ (ws ++ given props, w) | (w,ws) <- choose (wanted props) ]
+  [ (gs, g)                          | (g,gs) <- chooseProp (given props) ] ++
+  [ (unionProps ws (given props), w) | (w,ws) <- chooseProp (wanted props) ]
 \end{code}
 
 The predicate consists of two parts, both of the same form:  the first one
@@ -183,18 +183,18 @@ two functions until it runs out of work to do:
 \begin{code}
 addWorkItems :: PropSet -> InertSet -> Maybe InertSet
 addWorkItems ps is =
- case given ps of
-   g : gs ->
+ case getProp (given ps) of
+   Just (g,gs) ->
      do r <- addGiven g is
         addWorkItems (unionPropSets (newWork r) ps { given = gs }) (newInert r)
 
-   [] ->
-     case wanted ps of
-       w : ws ->
+   Nothing ->
+     case getProp (wanted ps) of
+       Just (w,ws) ->
          do r <- addWanted w is
             addWorkItems (unionPropSets (newWork r) ps { wanted = ws })
                                                                   (newInert r)
-       [] -> return is
+       Nothing -> return is
 \end{code}
 
 Note that we start by first adding all assumptions, and only then we consider
@@ -210,13 +210,15 @@ addGiven g props =
     NotForAny -> mzero
 
     NotForAll -> return PassResult
-      { newInert  = PropSet { wanted = [], given = g : given props }
-      , newWork   = props { given = [] }
+      { newInert  = PropSet { wanted = noProps
+                            , given = addProp g (given props)
+                            }
+      , newWork   = props { given = noProps }
       }
 
     YesIf ps -> return PassResult
       { newInert  = props
-      , newWork   = emptyPropSet { given = ps }
+      , newWork   = emptyPropSet { given = propsList ps }
       }
 \end{code}
 
@@ -225,17 +227,18 @@ addGiven g props =
 
 \begin{code}
 addWanted w props =
-  case entails (wanted props ++ given props) w of
+  case entails (unionProps (wanted props) (given props)) w of
 
     NotForAny -> mzero
 
     YesIf ps -> return PassResult
       { newInert  = props
-      , newWork   = emptyPropSet { wanted = ps }
+      , newWork   = emptyPropSet { wanted = propsList ps }
       }
 
     NotForAll ->
-      do (inert,restart) <- foldM check ([w],[]) (choose (wanted props))
+      do let start = (addProp w noProps, noProps)
+         (inert,restart) <- foldM check start (chooseProp (wanted props))
 
          return PassResult
            { newInert = props { wanted = inert }
@@ -244,10 +247,10 @@ addWanted w props =
 
   where
   check (inert,restart) (w1,ws) =
-    case entails (w : ws ++ given props) w1 of
+    case entails (addProp w (unionProps ws (given props))) w1 of
       NotForAny -> mzero
-      NotForAll -> return (w1 : inert, restart)
-      YesIf ps  -> return (inert, ps ++ restart)
+      NotForAll -> return (addProp w1 inert, restart)
+      YesIf ps  -> return (inert, foldr addProp restart ps)
 \end{code}
 
 
@@ -337,19 +340,33 @@ instance ApSubst Prop where
   apSubst su (Eq x y)         = Eq (apSubst su x) (apSubst su y)
   apSubst su (Leq x y)        = Leq (apSubst su x) (apSubst su y)
 
+instance ApSubst Props where
+  apSubst su ps = Props { pAdd = apSubst su (pAdd ps)
+                        , pMul = apSubst su (pMul ps)
+                        , pExp = apSubst su (pExp ps)
+                        , pLeq = apSubst su (pLeq ps)
+                        , pEq  = apSubst su (pEq ps)
+                        }
+
+instance (ApSubst a, ApSubst b) => ApSubst (a,b) where
+  apSubst su (x,y) = (apSubst su x, apSubst su y)
+
+instance (ApSubst a, ApSubst b, ApSubst c) => ApSubst (a,b,c) where
+  apSubst su (x,y,z) = (apSubst su x, apSubst su y, apSubst su z)
+
 substToEqns :: Subst -> [Prop]
 substToEqns su = [ Eq (Var x) t | (x,t) <- su ]
 
 -- Turn the equations that we have into a substitution, and return
 -- the remaining propositions.
-improvingSubst :: [Prop] -> Maybe (Subst, [Prop])
-improvingSubst ps0 = do (su,ps) <- loop ([],[]) ps0
-                        return (su, filter (not . trivial) ps)
+improvingSubst :: Props -> Maybe (Subst, Props)
+improvingSubst ps  = do su <- loop [] (pEq ps)
+                        return (su, filterProp (not . trivial)
+                                   $ apSubst su ps { pEq = [] } )
   where
-  loop (su,rest) (Eq x y : es) =
+  loop su ((x,y) : eqs) =
     do su1 <- mgu x y
-       loop (compose su1 su, apSubst su1 rest) (apSubst su1 es)
-  loop (su,rest) (e : es) = loop (su,e:rest) es
+       loop (compose su1 su) (apSubst su1 eqs)
   loop su [] = return su
 \end{code}
 
@@ -380,19 +397,19 @@ new_asmp = CongFunEq op p refl refl old_asmp
 
 Adding more assumptions cannot make things less contradictory
 \begin{code}
-entails_any_prop :: [Prop] -> Prop -> Prop -> Bool
+entails_any_prop :: Props -> Prop -> Prop -> Bool
 entails_any_prop ps q p =
   case entails ps q of
-    NotForAny -> isNotForAny (entails (p:ps) q)
+    NotForAny -> isNotForAny (entails (addProp p ps) q)
     _         -> True
 \end{code}
 
 Dropping assumptions cannot make things more contradictory or more
 defined.
 \begin{code}
-enatils_all_prop :: Prop -> [Prop] -> Prop -> Bool
+enatils_all_prop :: Prop -> Props -> Prop -> Bool
 enatils_all_prop p ps q =
-  case entails (p:ps) q of
+  case entails (addProp p ps) q of
     NotForAll -> isNotForAll (entails ps q)
     _         -> True
 \end{code}
@@ -484,6 +501,7 @@ extend0 prop =
     _                         -> return []
 
 
+{-
 extend1 :: Prop -> Prop -> Maybe [Prop]
 extend1 asmp prop =
   case prop of
@@ -542,13 +560,13 @@ extend1 asmp prop =
     -- x + y + 2 = x + y'
 -}
     _ -> return []
-
+-}
 
 
 \end{code}
 
 \begin{code}
-entails ps p | tr "entails?:" ps
+entails ps p | tr "entails?:" (propsToList ps)
              $ trace "  --------"
              $ trace ("  " ++ show p) False = undefined
 entails ps' p' =
@@ -561,7 +579,7 @@ entails ps' p' =
                        if solve ps p
                           then trace "yes!" $ YesIf []
                           else trace "try improvement" $
-                               case closure (p:ps) of
+                               case closure (addProp p ps) of
                                  Nothing -> trace "definately not" NotForAny
                                  Just (su1,_)
                                    | solve (apSubst su1 ps) (apSubst su1 p)
@@ -574,24 +592,25 @@ entails ps' p' =
 
 
 
-closure :: [Prop] -> Maybe (Subst, [Prop])
+closure :: Props -> Maybe (Subst, Props)
 closure ps = closure1 =<< improvingSubst ps
 
-closure1 :: (Subst, [Prop]) -> Maybe (Subst, [Prop])
+closure1 :: (Subst, Props) -> Maybe (Subst, Props)
 closure1 (su0, ps0) =
   do (su, ps) <- improvingSubst
-              $ do (q,qs) <- choose ps0
+              $ propsList
+              $ do (q,qs) <- chooseProp ps0
                    i      <- implied qs q
-                   guard (not (elem i ps0))
+                   guard (not (elemProp i ps0))
                    return i
 
      let su1 = compose su su0
          ps1 = apSubst su ps0
 
-     case ps of
-       [] -> tr "computed closure:" ps1
+     if isEmpty ps
+       then tr "computed closure:" (propsToList ps1)
            $ return (su1, ps1)
-       _  -> tr "adding:" (nub ps) $ closure1 (su1,nub (ps ++ ps1))
+       else tr "adding:" (propsToList ps) $ closure1 (su1, unionProps ps ps1)
 
 
 tr :: Show a => String -> [a] -> b -> b
@@ -604,11 +623,16 @@ tr x ys z = trace x (trace msg z)
 
 \begin{code}
 trivial :: Prop -> Bool
-trivial = solve []
+trivial = solve noProps
 \end{code}
 
 \begin{code}
-solve :: [Prop] -> Prop -> Bool
+solve :: Props -> Prop -> Bool
+solve  _ (Eq x y) | x == y = True
+solve ps p = solve0 [] p || elemProp p ps
+
+
+{-
 solve  _ (Eq x y) | x == y = True
 solve asmps prop =
       solve0 [] prop
@@ -619,9 +643,11 @@ solve asmps prop =
 
   where
   p1 : p2 : p3 : p4 : p5 : _ = map (`nth_product` asmps) [ 1 .. ]
+-}
 
-
-implied :: [Prop] -> Prop -> [Prop]
+implied :: Props -> Prop -> [Prop]
+implied = frule
+{-
 implied asmps prop = -- frule
   frule0 [] prop ++
   concatMap (`frule1` prop) p1 ++
@@ -631,7 +657,7 @@ implied asmps prop = -- frule
   concatMap (`frule5` prop) p5 -}
   where
   p1 : p2 : p3 : _ {- p4 : p5 : _ -} = map (`nth_product` asmps) [ 1 .. ]
-
+-}
 \end{code}
 
 
@@ -639,8 +665,8 @@ implied asmps prop = -- frule
 \begin{code}
 instance Show PropSet where
   show is = "\n" ++
-            unlines [ "G: " ++ show p | p <- given is ] ++
-            unlines [ "W: " ++ show p | p <- wanted is ]
+            unlines [ "G: " ++ show p | p <- propsToList (given is) ] ++
+            unlines [ "W: " ++ show p | p <- propsToList (wanted is) ]
 
 
 nth_product :: Int -> [a] -> [[a]]

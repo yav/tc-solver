@@ -71,8 +71,8 @@ initS = S { entered = M.empty, inertSet = Just emptyPropSet }
 
 addWorkItemsUI :: [WorkItem] -> PropSet -> Maybe PropSet
 addWorkItemsUI ws is = addWorkItems set is
-  where set = PropSet { wanted = [ w | (Wanted,w) <- ws ]
-                      , given  = [ g | (Given,g) <- ws ]
+  where set = PropSet { wanted = propsList [ w | (Wanted,w) <- ws ]
+                      , given  = propsList [ g | (Given,g) <- ws ]
                       }
 
 processCmd :: Cmd -> S -> S
@@ -176,8 +176,9 @@ renderWI (x,y) = list [ show (show x), show (show y) ]
 renderIS :: Maybe PropSet -> String
 renderIS Nothing = "[ [\"Wanted\",\"(inconsistent)\"]," ++
                      "[\"Given\", \"(inconsistent)\"] ]"
-renderIS (Just xs) = list ( [ renderWI (Given,g) | g <- given xs ] ++
-                            [ renderWI (Wanted,w) | w <- wanted xs ])
+renderIS (Just xs) =
+  list ( [ renderWI (Given,g) | g <- propsToList (given xs) ] ++
+         [ renderWI (Wanted,w) | w <- propsToList (wanted xs) ])
 
 list xs = "[" ++ concat (intersperse "," xs) ++ "]"
 

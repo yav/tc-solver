@@ -3,12 +3,14 @@
 module Test where
 
 import Data.Maybe(catMaybes)
+import Data.List(unfoldr,union)
 import Control.Monad(mzero)
 
 type Xi = String
 
 data Term = Var Xi | Num Integer (Maybe Xi)
-            deriving Eq
+            deriving (Eq,Ord)
+
 data Op   = Add | Mul | Exp deriving Eq
 data Prop = EqFun Op Term Term Term
           | Leq Term Term
@@ -82,12 +84,72 @@ noProps = Props [] [] [] [] []
 addProp :: Prop -> Props -> Props
 addProp prop props =
   case prop of
-    EqFun Add t1 t2 t3 -> props { pAdd = (t1,t2,t3) : pAdd props }
-    EqFun Mul t1 t2 t3 -> props { pMul = (t1,t2,t3) : pMul props }
-    EqFun Exp t1 t2 t3 -> props { pExp = (t1,t2,t3) : pExp props }
-    Leq t1 t2          -> props { pLeq = (t1,t2)    : pLeq props }
-    Eq t1 t2           -> props { pEq  = (t1,t2)    : pEq props }
+    EqFun Add t1 t2 t3 -> props { pAdd = (t1,t2,t3) `ins` pAdd props }
+    EqFun Mul t1 t2 t3 -> props { pMul = (t1,t2,t3) `ins` pMul props }
+    EqFun Exp t1 t2 t3 -> props { pExp = (t1,t2,t3) `ins` pExp props }
+    Leq t1 t2          -> props { pLeq = (t1,t2)    `ins` pLeq props }
+    Eq t1 t2           -> props { pEq  = (t1,t2)    `ins` pEq props }
+  where ins x [] = [x]
+        ins x (y:ys)
+          | x == y  = y : ys
+          | x < y   = x : y : ys
+          | otherwise = y : ins x ys
 
+filterProp :: (Prop -> Bool) -> Props -> Props
+filterProp p ps = Props
+  { pAdd = filter (p3 (EqFun Add)) (pAdd ps)
+  , pMul = filter (p3 (EqFun Mul)) (pMul ps)
+  , pExp = filter (p3 (EqFun Exp)) (pExp ps)
+  , pLeq = filter (p2 Leq)         (pLeq ps)
+  , pEq  = filter (p2 Eq)          (pEq ps)
+  }
+  where p3 f (x,y,z) = p (f x y z)
+        p2 f (x,y)   = p (f x y)
+
+
+unionProps :: Props -> Props -> Props
+unionProps ps qs = Props
+  { pAdd = pAdd ps `union` pAdd qs
+  , pMul = pMul ps `union` pMul qs
+  , pExp = pExp ps `union` pExp qs
+  , pLeq = pLeq ps `union` pLeq qs
+  , pEq  = pEq  ps `union` pEq  qs
+  }
+
+getProp :: Props -> Maybe (Prop, Props)
+getProp ps =
+  case pAdd ps of { x:xs -> return (mk3 (EqFun Add) x, ps { pAdd = xs }); [] ->
+  case pMul ps of { x:xs -> return (mk3 (EqFun Mul) x, ps { pMul = xs }); [] ->
+  case pExp ps of { x:xs -> return (mk3 (EqFun Exp) x, ps { pExp = xs }); [] ->
+  case pLeq ps of { x:xs -> return (mk2 Leq         x, ps { pLeq = xs }); [] ->
+  case pEq  ps of { x:xs -> return (mk2 Eq          x, ps { pEq  = xs }); [] ->
+  Nothing }}}}}
+  where mk2 f (x,y)   = f x y
+        mk3 f (x,y,z) = f x y z
+
+elemProp :: Prop -> Props -> Bool
+elemProp (EqFun op x y z) ps = elem (x,y,z) $ case op of
+                                                Add -> pAdd ps
+                                                Mul -> pMul ps
+                                                Exp -> pExp ps
+elemProp (Leq x y) ps  = elem (x,y) (pLeq ps)
+elemProp (Eq x y) ps   = elem (x,y) (pEq ps)
+
+isEmpty :: Props -> Bool
+isEmpty ps = null (pAdd ps) && null (pMul ps) && null (pExp ps) &&
+             null (pLeq ps) && null (pEq ps)
+
+chooseProp :: Props -> [(Prop,Props)]
+chooseProp ps =
+  case getProp ps of
+    Just (x,xs) -> (x,xs) : [ (y, addProp x ys) | (y,ys) <- chooseProp xs ]
+    Nothing     -> []
+
+propsList :: [Prop] -> Props
+propsList = foldr addProp noProps
+
+propsToList :: Props -> [Prop]
+propsToList = unfoldr getProp
 
 
 
