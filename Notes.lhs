@@ -207,22 +207,45 @@ the goals because the assumptions might help us to solve the goals.
 
 \subsection{Adding a New Assumption}
 
+When we add a new assumption to an inert set we check for ``interactions''
+with the existing assumptions by using the entailment function:
+
 \begin{code}
 addGiven g props =
   case entails (given props) g of
+\end{code}
 
+The first possibility is that the new assumption is incompatable with
+the existing assumptions, in which case we simply report an error
+and ignore the new fact:
+
+\begin{code}
     NotForAny -> mzero
+\end{code}
 
+Another possible outcome is that---in its current form---the proposition
+is already entailed by the currently known assumptions.  Then, we leave
+the inert set unmodified but we record the alternative formulation (if any)
+as new work to be processed by the solver.
+
+\begin{code}
+    YesIf ps -> return PassResult
+      { newInert  = props
+      , newWork   = emptyPropSet { given = propsList ps }
+      }
+\end{code}
+
+Finally, if entailment yielded no interaction, then we add the new fact to
+the inert set.  Any goals that were in the inert set are removed and added
+back to the work queue so that we can re-process them in the context of the
+new assumption.
+
+\begin{code}
     NotForAll -> return PassResult
       { newInert  = PropSet { wanted = noProps
                             , given = addProp g (given props)
                             }
       , newWork   = props { given = noProps }
-      }
-
-    YesIf ps -> return PassResult
-      { newInert  = props
-      , newWork   = emptyPropSet { given = propsList ps }
       }
 \end{code}
 
