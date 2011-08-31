@@ -1,3 +1,5 @@
+> module Main(main) where
+
 > import qualified Data.Map as M
 > import Text.PrettyPrint
 > import Data.List
@@ -23,7 +25,7 @@ Terms and Propositions
 >             | Var Var
 >               deriving (Eq,Ord)
 >
-> data Prop   = Prop Op [Term]
+> data Prop   = Prop { pPred :: Op, pArgs :: [Term] }
 >               deriving Eq
 >
 > data Op     = Add | Mul | Exp | Eq | Leq
@@ -298,8 +300,8 @@ A => y = x
 > eqSym :: Rule -> Maybe Rule
 > eqSym r = case rConc r of
 >             Prop Eq [x,y] -> return r { rConc = Prop Eq [y,x]
->                                        , rName = EqSym (rName r)
->                                        }
+>                                       , rName = EqSym (rName r)
+>                                       }
 >             _ -> mzero
 
 
@@ -312,6 +314,8 @@ Substitution
 > class FVS t where
 >   fvs     :: t -> [Var]
 >   apSubst :: Subst -> t -> t
+
+> class FVS t => Match t where
 >   match   :: t -> t -> [Subst]
 >   mgu     :: t -> t -> [Subst]
 
@@ -358,6 +362,8 @@ Rename a variable so that it is different from a set of given names.
 > instance (FVS a, FVS b) => FVS (a,b) where
 >   fvs (x,y)         = union (fvs x) (fvs y)
 >   apSubst s (x,y)   = (apSubst s x, apSubst s y)
+>
+> instance (Match a, Match b) => Match (a,b) where
 >   match (a,b) (x,y) = do su1 <- match a x
 >                          su2 <- match b y
 >                          merge su1 su2
@@ -369,6 +375,7 @@ Rename a variable so that it is different from a set of given names.
 >   fvs         = unions . map fvs
 >   apSubst s   = map (apSubst s)
 >
+> instance (Match a) => Match [a] where
 >   match [] []         = return []
 >   match (x:xs) (y:ys) = match (x,xs) (y,ys)
 >   match _ _           = mzero
@@ -393,9 +400,10 @@ Rename a variable so that it is different from a set of given names.
 >       App op t1 t2  -> App op (apSubst su t1) (apSubst su t2)
 >       Const _       -> term
 >
+>
+> instance Match Term where
 >   match (Var v) t  = case (v,t) of
 >                            (NV _, Var (V _)) -> mzero
->                            -- (V _, Var (NV _)) -> mzero
 >                            _                 -> return [(v,t)]
 >   match (Const x) (Const y) | x == y  = return []
 >   match (App op1 s1 t1) (App op2 s2 t2)
@@ -426,6 +434,8 @@ Rename a variable so that it is different from a set of given names.
 >
 >   apSubst su (Prop op ts) = Prop op (apSubst su ts)
 >
+>
+> instance Match Prop where
 >   match (Prop op ts) (Prop op' ts') | op == op' = match ts ts'
 >   match _ _ = mzero
 >
@@ -441,14 +451,20 @@ Rename a variable so that it is different from a set of given names.
 >                             }
 >     where su' = [ (x,t) | (x,t) <- s, x `elem` fvs r ]
 >
+>
+> instance Match Rule where
 >   match r1 r2 =
 >     do sRes  <- match (rConc r1) (rConc r2)
 >        sSi   <- matchSet (rSides r1) (rSides r2)
 >        sCons <- matchSet (rAsmps r1) (rAsmps r2)
 >        merge sSi =<< merge sRes sCons
-
-
-
+>
+>   mgu r1 r2 =
+>     do s1 <- mgu (rConc r1) (rConc r2)
+>        s2 <- mguSet (apSubst s1 (rSides r1)) (apSubst s1 (rSides r2))
+>        let s3 = compose s2 s1
+>        s4 <- mguSet (apSubst s3 (rAsmps r1)) (apSubst s3 (rAsmps r2))
+>        return (compose s4 s3)
 
 == Matching ==
 
@@ -469,11 +485,14 @@ Match two lists of equations, disregarding the order.
 >                          match (x,xs) (y,ys)
 > matchSet _ _        = mzero
 
+
 > mguSet :: [Prop] -> [Prop] -> [Subst]
 > mguSet [] []      = return []
 > mguSet (x:xs) zs  = do (y,ys) <- choose zs
 >                        mgu (x,xs) (y,ys)
 > mguSet _ _        = mzero
+
+
 
 
 
@@ -500,53 +519,6 @@ really has the form:
 (nA + y + nC) => y = nB     // as long as nA + nB = nC
 
 
-
-Example:
-
-1 + 2 = 3 |- x + y = z
-----------------------
-a + b = c |- 1 + 2 = 3
-Fails, the first rule is not more general.
-
-> {-
-> exampleMatch :: [Subst]
-> exampleMatch = match
->                  (aRule "X" [Prop Add i1 i2 i3]       (Prop Add x y z))
->                  (aRule "Y" [Prop Add a b c] (Prop Add i1 i2 i3))
->   where i1 : i2 : i3 : _ = map Const [ 1 .. ]
->         a  : b  : c  : _ = map (Var . V . return) [ 'a' .. ]
->         x  : y  : z  : _ = map (Var . V . return) [ 'x' .. ]
-
-
-
-1 + 1 = 2 |- 1 + 1 = 2
-----------------------
-x + y = z |- x + y = z
-Fails.
-
-> exampleMatch2 :: [Subst]
-> exampleMatch2 = match
->                  (aRule "X" [Prop Add i1 i2 i3]  (Prop Add i1 i2 i3))
->                  (aRule "Y" [Prop Add x y z]     (Prop Add x y z))
->   where i1 : i2 : i3 : _ = map Const [ 1 .. ]
->         x  : y  : z  : _ = map (Var . V . return) [ 'x' .. ]
-
-
-
-x + y = z |- 1 + 2 = 3
------------------------
-1 + 1 = 2 |- 1 + 3 = 3
-Succeeds: [[(z,3),(y,2),(x,1)]]
-
-> exampleMatch3 :: [Subst]
-> exampleMatch3 = match
->                  (aRule "X" [Prop Add x y z]    (Prop Add i1 i2 i3))
->                  (aRule "Y" [Prop Add i1 i2 i3] (Prop Add i1 i2 i3))
->   where i1 : i2 : i3 : _ = map Const [ 1 .. ]
->         x  : y  : z  : _ = map (Var . V . return) [ 'x' .. ]
-> -}
-
-
 > betterRuleThen :: Rule -> Rule -> Bool
 > r1 `betterRuleThen` r2'  =
 >   let r2 = fresh (fvs r1) r2'
@@ -568,13 +540,6 @@ Succeeds: [[(z,3),(y,2),(x,1)]]
 > addRule r rs = if any (`betterRuleThen` r) rs
 >                   then rs
 >                   else r : filter (not . (r `betterRuleThen`)) rs
-
-> ruleSetExample :: [Rule]
-> ruleSetExample = addRule (rule [] (x + y === z))
->                $ addRule (rule [] (a + b === c)) []
->   where x : y : z : _ = srcOfVars V 0
->         a : b : c : _ = srcOfVars V 1
-
 
 
 
@@ -640,9 +605,9 @@ Showing
 > ppRuleName :: RuleName -> Doc
 > ppRuleName r0 =
 >   case r0 of
->     RuleBasic x     -> text x
->     RuleInst s r    -> (text "inst. with" <+> hsep (punctuate comma $ map ppS s))
->                        $$ nest 2 (ppRuleName r)
+>     RuleBasic x  -> text x
+>     RuleInst s r -> (text "inst. with" <+> hsep (punctuate comma $ map ppS s))
+>                  $$ nest 2 (ppRuleName r)
 >       where ppS (x,t) = text (show x) <+> text "=" <+> text (show t)
 >     RuleCut r1 n r2 -> text "let argument" <+> integer n <+> text "of"
 >                          $$ nest 3 (ppRuleName r1)
@@ -723,19 +688,14 @@ Showing
 >      let su = eqs s
 >          x1 = apSubst su t1
 >          x2 = apSubst su t2
->          bindVar x t = set $ s { eqs = (x,t)
->                                : [ (y,apSubst [(x,t)] st) | (y,st) <- su ] }
+>
 >      case r of
 >        Eq ->
->         case (x1,x2) of
->           (Const x, Const y) | x /= y ->
->              error $ "bug: We assumed False: " ++ show x ++ " /= " ++ show y
->           _ | x1 == x2 -> return ()
->           (Var x, t)  -> bindVar x t
->           (t, Var x)  -> bindVar x t
->           (x, y) ->
->              error $ "(kind of bug): We are equating SomeConsts: " ++
->                      show (x,y)
+>         case mgu x1 x2 of
+>           [su1] -> set $ s { eqs = compose su1 su }
+>           _     -> error $ "bug: We assumed False: " ++ show x1 ++
+>                                               " /= " ++ show x2
+>
 >        Leq ->
 >         case (x1,x2) of
 >           (Const x, Const y)
@@ -808,13 +768,6 @@ Showing
 >                        text "----------------" $$
 >                        pp (rConc r)
 >   where pp x = text (show x)
->
-> ppRule :: Rule -> IO ()
-> ppRule r =
->   do print $ ppRuleName $ rName r
->      print $ ppLongRule r
->      putStrLn ""
-
 
 > choose :: [a] -> [(a,[a])]
 > choose [] = []
@@ -899,9 +852,12 @@ Just x <- divide y 5
 >   apSubst s d = d { defArg1 = apSubst s (defArg1 d)
 >                   , defArg2 = apSubst s (defArg2 d)
 >                   }
+
+> {-
 >   match d1 d2 = do guard (defPartial d1 == defPartial d2)
 >                    guard (defOp d1 == defOp d2)
 >                    match (defArg1 d1, defArg2 d1) (defArg1 d2, defArg2 d2)
+> -}
 
 
 
@@ -940,10 +896,10 @@ They combine the existing assumptions with the new fact to derive more facts.
 "Backward" rules are used to solve a goal, from a set of assumptions.
 
 > data BRule = BRule
->   { bPats     :: [ Prop ] -- Existing assumptions
->   , bGuards   :: [ Guard ]          -- Side conditions
->   , bBoringGs :: [ Guard ]          -- Uninteresting equality side conditions
->   , bNew      :: Prop -- Fact that can be solved
+>   { bPats     :: [ Prop ]   -- Existing assumptions
+>   , bGuards   :: [ Guard ]  -- Side conditions
+>   , bBoringGs :: [ Guard ]  -- Uninteresting equality side conditions
+>   , bNew      :: Prop       -- Fact that can be solved
 >   , bNotes    :: Doc
 >   }
 
@@ -962,9 +918,11 @@ variables.
 >   apSubst s (GBool eq)  = GBool (apSubst s eq)
 >   apSubst s (GPat x d)  = GPat x (apSubst s d)
 >
+> {-
 >   match (GBool e1) (GBool e2) = match e1 e2
 >   match (GPat {}) (GPat {})   = mzero -- XXX: What do we do here (binders)
 >   match _ _ = mzero
+> -}
 >
 >
 > instance Show Guard where
@@ -988,12 +946,6 @@ variables.
 >        a  <- nonLin (bNew r)
 >        unless (null $ intersect (fvs ps) (fvs a)) $ error "non-lin bug"
 >        return r { bPats = ps, bNew = a }
->
-> definesGuard :: Guard -> [Var]
-> definesGuard g =
->   case g of
->     GPat v _ -> [v]
->     GBool _  -> []
 
 
 We know that while type checking we never have assumptions
@@ -1147,6 +1099,16 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > listPat :: [Pat] -> Pat
 > listPat ps = brackets $ fsep $ punctuate comma ps
 
+> smallList :: [Doc] -> Doc
+> smallList ds = brackets $ fsep $ punctuate comma ds
+
+> bigList :: [Doc] -> Doc
+> bigList [] = text "[]"
+> bigList (x : xs) = (text "[" <+> x) $$
+>                   vcat [ comma <+> y | y <- xs ] $$
+>                   text "]"
+
+
 > ppGuards :: [Guard] -> [Guard] -> Doc
 > ppGuards bore gs =
 >   case (map pp bore, map pp gs) of
@@ -1195,30 +1157,6 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >               $$ nest 2 (ppGuards (bBoringGs r) (bGuards r)
 >               $$ text "->" <+> text "True")
 >
-> fruleToFun :: String -> FRule -> Doc
-> fruleToFun nm r =
->   ptext "{-" <+> fNotes r <+> text "-}" $$
->   (name <+> eqnsToPat (propsToList (fPats r)) <+> parens (eqnToPat (fAdding r)))
->      $$ (nest 2 (ppGuards (fBoringGs r) (fGuards r)
->           <+> text "=" <+> text "Just" <+> eqnToExpr (fNew r)))
->      $$ name <+> text "_ _ = Nothing"
->
->     where name = text nm
-
-> fruleFun :: (Int, [FRule]) -> Doc
-> fruleFun (_,[]) = error "bug: fruleFun []"
-> fruleFun (n,fs) = text "frule" <> int n <+> text " :: [Prop] -> Prop -> [Prop]" $$
->               text "frule" <> int n <+> text "asmps" <+> text "new"
->                 <+> text "=" <+> text "catMaybes"
->                       $$ nest 2 (smallList aux)
->   $$ nest 2 (text "where" $$ vsep defs)
->   where
->   nameDef x f = let name = "try_" ++ show x
->                 in ( text name <+> text "asmps" <+> text "new"
->                    , fruleToFun name f
->                    )
->   (aux, defs) = unzip (zipWith nameDef [1 :: Integer ..] fs)
-
 > solveFun :: (Int, [BRule]) -> Doc
 > solveFun (_,[]) = error "bug: solveFun []"
 > solveFun (n, bs) =
@@ -1227,40 +1165,50 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >   nest 2 (text "case goal : asmps of"
 >           $$ nest 2 (vsep (map bruleToAlt bs) $$ text "_ -> False"))
 
-> ex :: Doc
-> ex = text "-- Stats:"
+
+
+> main :: IO ()
+> main = writeFile "TcTypeNatsRules.hs" $ show $
+>   text "-- WARNING: This file is generated automatically!" $$
+>   text "-- WARNING: Do not add interesting changes, as they will be lost." $$
+>   text "--"
+>   $$ text "-- Stats:"
 >   $$ text "--"
 >   $$ vcat (map (ppStats "solve") solveFuns)
 >   $$ text "--"
->   $$ vcat (map (ppStats "frule") frules)
->   $$ newStats
->   $$ codeFRules groupedFs
+>   $$ vsep (map ppFStats $ M.toList groupedFs)
 >   $$ text "--"
 >   $$ text "-- Back rules"
 >   $$ vsep (map solveFun solveFuns)
 >   $$ text "\n\n-- Forward rules"
->   $$ vsep (map fruleFun frules)
+>   $$ codeFRules groupedFs
 >   where
 >   (frs,brs) = solverRules
 >   solveFuns = groupLens bPats brs
->   frules    = groupLens (propsToList . fPats) frs
 >   ppStats x (n,as)  = text "--" <+> text x <> int n
 >                       <+> int (length as) <+> text "cases"
 >   groupedFs = groupFRules frs
->   newStats = vcat $ map ppNewStats $ M.toList groupedFs
 
-> groupFRules :: [FRule] -> M.Map Op (M.Map String [FRule])
-> groupFRules frs = M.map byAsmps (foldr addHead M.empty frs)
+> type FRulesForOp = M.Map [(Op,Int)] [FRule]
+
+> groupFRules :: [FRule] -> M.Map Op FRulesForOp
+> groupFRules = M.map byAsmps . foldr addHead M.empty
 >   where
->   hd (Prop h _) = h
->   addHead f     = M.insertWith (++) (hd (fAdding f)) [f]
+>   addHead f     = M.insertWith (++) (pPred (fAdding f)) [f]
 >   byAsmps       = foldr addAsmps M.empty
 >   addAsmps f    = M.insertWith (++) key [f]
->     where key   = propsSig (fPats f)
+>     where key   = map cvt $ group $ sort $ map pPred $ propsToList $ fPats f
+>           cvt x = (head x, length x)
 >
-> ppNewStats (k, m) = text "--" <+> text (show k)
+> ppFStats :: (Op,FRulesForOp) -> Doc
+> ppFStats (k0,m) = text "-- frules for" <+> text (opCon k0)
 >                  $$ vcat (map pp (M.toList m))
->   where pp (s,fs) = text "--  " <+> text s <+> int (length fs)
+>   where pp (k,fs) = text "--  " <+> pad (length fs) <> text ":" <+> ppK k
+>         ppK []    = text "(no asmps)"
+>         ppK xs    = fsep $ punctuate comma
+>                            [ int num <+> text (opCon op) | (op,num) <- xs ]
+>
+>         pad x     = let t = show x in text (replicate (3 - length t) ' ' ++ t)
 
 --------------------------------------------------------------------------------
 
@@ -1281,10 +1229,10 @@ frule_Add_2_1_0_0_0 t1 t2 t3 =
             ]
 
 
-> codeFRules :: M.Map Op (M.Map String [FRule]) -> Doc
+> codeFRules :: M.Map Op (M.Map [(Op,Int)] [FRule]) -> Doc
 > codeFRules m =
->   text "frule :: Props -> Prop -> [Prop]" $$
->   text "frule props newProp = case newProp of" $$
+>   text "implied :: Props -> Prop -> [Prop]" $$
+>   text "implied" <+> fruleAsmpsName <+> text "newProp = case newProp of" $$
 >   nest 2 (vcat (map cases (M.toList m)) $$ text "_ -> []")
 >   where
 >   cases (op,m1) =
@@ -1300,39 +1248,28 @@ frule_Add_2_1_0_0_0 t1 t2 t3 =
 >                  )
 
 
-> ppTup :: [Doc] -> Doc
-> ppTup = parens . hsep . punctuate comma
-
-> smallList :: [Doc] -> Doc
-> smallList ds = brackets $ fsep $ punctuate comma ds
-
-> bigList :: [Doc] -> Doc
-> bigList [] = text "[]"
-> bigList (x : xs) = (text "[" <+> x) $$
->                   vcat [ comma <+> y | y <- xs ] $$
->                   text "]"
-
 > fruleOrder :: [Op]
 > fruleOrder = [ Add, Mul, Exp, Leq, Eq ]
 >
 > fruleVar :: Int -> String
 > fruleVar n  = "arg" ++ show n
 >
+> fruleAsmpsName :: Doc
 > fruleAsmpsName = text "props"
 >
 > fruleCase :: FRule -> Doc
 > fruleCase r =
 >      ptext "{-" <+> fNotes r <+> text "-}"
 >   $$ text "case" <+> vars <+> text "of"
->   $$ nest 2 ( ppTup pats $$ nest 2 (ppGuards (fBoringGs r) (fGuards r)
+>   $$ nest 2 ( tuplePat pats $$ nest 2 (ppGuards (fBoringGs r) (fGuards r)
 >                             <+> text "-> return" <+> eqnToExpr (fNew r))
 >               $$ text "_ -> mzero"
 >             )
 >   where
->   vars       = ppTup $ take (length pats) $ map (text . fruleVar) [ 0 .. ]
->   pats       = map termToPat $ addPs ++ concatMap getPats fruleOrder
->   addPs      = case fAdding r of
->                  Prop _ ts -> ts
+>   vars       = parens $ fsep $ punctuate comma
+>                       $ take (length pats) $ map (text . fruleVar) [ 0 .. ]
+>   pats       = map termToPat $ pArgs (fAdding r) ++
+>                                                 concatMap getPats fruleOrder
 >   getPats op = case M.lookup op (fPats r) of
 >                  Nothing  -> []
 >                  Just ts  -> concat ts
@@ -1384,14 +1321,6 @@ Generates code search for assumptions of the appropriate "shape"
 >         rearrange xs = (fst (head xs), map snd xs)
 
 
-
-> main :: IO ()
-> main = writeFile "TcTypeNatsRules.hs" $ show $
->   text "-- WARNING: This file is generated automatically!" $$
->   text "-- WARNING: Do not add interesting changes, as they will be lost." $$
->   text "--" $$
->   ex
-
 --------------------------------------------------------------------------------
 
 
@@ -1439,15 +1368,6 @@ do [ p1, p2 ] <- nth_product 2 (pAdd props)
 > propsFromList :: [Prop] -> Props
 > propsFromList = foldr addProp noProps
 
-
->
-> propsSig :: Props -> String
-> propsSig ps = concat $ intersperse "_" $ map show [ len o | o <- ops ]
->   where ops = [ Add, Mul, Exp, Leq, Eq ]
->         len x = case M.lookup x ps of
->                   Just ts -> length ts
->                   Nothing -> 0
->
 
 
 

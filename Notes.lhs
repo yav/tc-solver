@@ -370,82 +370,6 @@ enatils_all_prop p ps q =
 
 \begin{code}
 {-
-simpleEntails :: Prop -> Answer
-simpleEntails p =
-  case p of
-    Eq x y ->
-      case mgu x y of
-        Just su
-          | not (p `elem` eqns) -> YesIf eqns
-          | otherwise           -> NotForAll
-          where eqns = substToEqns su
-        Nothing -> NotForAny
-
-    Leq x y
-      | Num 0 _ <- x                -> YesIf []
-      | Num 0 _ <- y                -> YesIf [ Eq x (num 0) ]
-      | Num m _ <- x, Num n _ <- y  -> if m <= n then YesIf [] else NotForAny
-      | x == y                      -> YesIf []
-      | otherwise                   -> NotForAll
-
-    EqFun Add x y z
-      | Num 0 _ <- x                -> YesIf [ Eq y z ]
-      | Num 0 _ <- y                -> YesIf [ Eq x z ]
-      | Num 0 _ <- z                -> YesIf [ Eq x (num 0), Eq y (num 0) ]
-      | Num m _ <- x, Num n _ <- y  -> YesIf [ Eq z (num (m + n)) ]
-      | Num m _ <- x, Num n _ <- z  -> case minus n m of
-                                         Just r   -> YesIf [ Eq y (num r) ]
-                                         Nothing  -> NotForAny
-      | Num m _ <- y, Num n _ <- z  -> case minus n m of
-                                         Just r   -> YesIf [ Eq x (num r) ]
-                                         Nothing  -> NotForAny
-      | x == z                      -> YesIf [ Eq y (num 0) ]
-      | y == z                      -> YesIf [ Eq x (num 0) ]
-      | x == y                      -> YesIf [ EqFun Mul x (num 2) z ]
-      | Num _ _ <- y                -> YesIf [ EqFun Add y x z ] -- const on L
-      | otherwise                   -> NotForAll
-
-    EqFun Mul x y z
-      | Num 0 _ <- x                -> YesIf [ Eq z (num 0) ]
-      | Num 0 _ <- y                -> YesIf [ Eq z (num 0) ]
-      | Num 1 _ <- x                -> YesIf [ Eq y z ]
-      | Num 1 _ <- y                -> YesIf [ Eq x z ]
-      | Num 1 _ <- z                -> YesIf [ Eq x (num 1), Eq y (num 1) ]
-
-      | Num m _ <- x, Num n _ <- y  -> YesIf [ Eq z (num (m * n)) ]
-      | Num m _ <- x, Num n _ <- z  -> case divide n m of
-                                         Just r   -> YesIf [ Eq y (num r) ]
-                                         Nothing  -> NotForAny
-      | Num m _ <- y, Num n _ <- z  -> case divide n m of
-                                         Just r   -> YesIf [ Eq x (num r) ]
-                                         Nothing  -> NotForAny
-      | x == y                      -> YesIf [ EqFun Exp x (num 2) z ]
-      | Num _ _ <- y                -> YesIf [ EqFun Mul y x z ] -- const on L
-      | otherwise                   -> NotForAll
-
-    EqFun Exp x y z
-      | Num 0 _ <- x                -> YesIf [ Leq z (num 1) ]
-      | Num 0 _ <- y                -> YesIf [ Eq z (num 1) ]
-      | Num 0 _ <- z                -> YesIf [ Eq x (num 0), Leq (num 1) y ]
-      | Num 1 _ <- x                -> YesIf [ Eq z (num 1) ]
-      | Num 1 _ <- y                -> YesIf [ Eq x z ]
-
-      | Num m _ <- x, Num n _ <- y  -> YesIf [ Eq z (num (m ^ n)) ]
-      | Num m _ <- x, Num n _ <- z  -> case descreteLog m n of
-                                         Just r   -> YesIf [ Eq y (num r) ]
-                                         Nothing  -> NotForAny
-      | Num m _ <- y, Num n _ <- z  -> case descreteRoot m n of
-                                         Just r   -> YesIf [ Eq x (num r) ]
-                                         Nothing  -> NotForAny
-      | x == z                      -> YesIf [ Eq x (num 1), Eq z (num 1) ]
-      | y == z                      -> YesIf [ Eq x (num 1), Eq y (num 1),
-                                                             Eq z (num 1) ]
-      | otherwise                   -> NotForAll
--}
-\end{code}
-
-\begin{code}
-{-
 extend0 prop =
   case prop of
     EqFun Add x y z           -> return [ Leq x z, Leq y z, EqFun Add y x z ]
@@ -530,21 +454,18 @@ entails ps' p' =
     Nothing -> error "bug: Inert invariant failed!"
     Just (su,ps) ->
       let p = apSubst su p'
-      in {-case simpleEntails p of
-           NotForAll -> -}
-                       if solve ps p
-                          then trace "yes!" $ YesIf []
-                          else trace "try improvement" $
-                               case closure (addProp p ps) of
-                                 Nothing -> trace "definately not" NotForAny
-                                 Just (su1,_)
-                                   | solve (apSubst su1 ps) (apSubst su1 p)
-                                  && not (p' `elem` eqns) ->
-                                       trace "yes!" YesIf eqns
-                                   | p == p'   -> trace "no" NotForAll
-                                   | otherwise -> YesIf [p]
-                                   where eqns = substToEqns su1
-           -- res -> res
+      in if solve ps p
+            then trace "yes!" $ YesIf []
+            else trace "try improvement" $
+                 case closure (addProp p ps) of
+                   Nothing -> trace "definately not" NotForAny
+                   Just (su1,_)
+                     | solve (apSubst su1 ps) (apSubst su1 p)
+                    && not (p' `elem` eqns) ->
+                         trace "yes!" YesIf eqns
+                     | p == p'   -> trace "no" NotForAll
+                     | otherwise -> YesIf [p]
+                     where eqns = substToEqns su1
 
 
 
@@ -568,52 +489,16 @@ closure1 (su0, ps0) =
            $ return (su1, ps1)
        else tr "adding:" (propsToList ps) $ closure1 (su1, unionProps ps ps1)
 
-
-tr :: Show a => String -> [a] -> b -> b
-tr x ys z = trace x (trace msg z)
-  where msg = case ys of
-                [] -> "  (empty)"
-                _  -> unlines [ "  " ++ show y | y <- ys ]
 \end{code}
 
 
 \begin{code}
 trivial :: Prop -> Bool
 trivial = solve noProps
-\end{code}
 
-\begin{code}
 solve :: Props -> Prop -> Bool
 solve  _ (Prop Eq [x,y]) | x == y = True
 solve ps p = solve0 [] p || elemProp p ps
-
-
-{-
-solve  _ (Eq x y) | x == y = True
-solve asmps prop =
-      solve0 [] prop
-   || (prop `elem` asmps) -- any (`solve1` prop) p1
-   -- || any (`solve2` prop) p2
-   -- || any (`solve3` prop) p3
-   -- || any (`solve4` prop) p4
-
-  where
-  p1 : p2 : p3 : p4 : p5 : _ = map (`nth_product` asmps) [ 1 .. ]
--}
-
-implied :: Props -> Prop -> [Prop]
-implied = frule
-{-
-implied asmps prop = -- frule
-  frule0 [] prop ++
-  concatMap (`frule1` prop) p1 ++
-  concatMap (`frule2` prop) p2 ++
-  concatMap (`frule3` prop) p3 {- ++
-  concatMap (`frule4` prop) p4 ++
-  concatMap (`frule5` prop) p5 -}
-  where
-  p1 : p2 : p3 : _ {- p4 : p5 : _ -} = map (`nth_product` asmps) [ 1 .. ]
--}
 \end{code}
 
 
@@ -623,14 +508,6 @@ instance Show PropSet where
   show is = "\n" ++
             unlines [ "G: " ++ show p | p <- propsToList (given is) ] ++
             unlines [ "W: " ++ show p | p <- propsToList (wanted is) ]
-
-
-nth_product :: Int -> [a] -> [[a]]
-nth_product n xs | n <= 1     = do x <- xs
-                                   return [x]
-                 | otherwise  = do (x,ys) <- choose xs
-                                   zs <- nth_product (n-1) ys
-                                   return (x : zs)
 
 
 isNotForAny :: Answer -> Bool
@@ -644,6 +521,13 @@ isNotForAll _         = False
 isYesIf :: Answer -> Bool
 isYesIf (YesIf _)     = True
 isYesIf _             = False
+
+
+tr :: Show a => String -> [a] -> b -> b
+tr x ys z = trace x (trace msg z)
+  where msg = case ys of
+                [] -> "  (empty)"
+                _  -> unlines [ "  " ++ show y | y <- ys ]
 
 \end{code}
 
