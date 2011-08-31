@@ -2,7 +2,6 @@
 
 module Test where
 
-import Data.Maybe(catMaybes)
 import Data.List(union,find)
 import Control.Monad(mzero)
 import qualified Data.Map as M
