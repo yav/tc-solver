@@ -72,9 +72,10 @@ data Answer = NotForAny | NotForAll | YesIf [Prop]
 
 More precisely, \Verb"NotForAny" asserts that the proposition in question
 contradicts the given set of assumptions, no matter how we instantiate its
-free variables.  The following two examples both result in a
-\Verb"NotForAny" answer (we use the more traditional mathematical notation
-for entailment)
+free variables (i.e., we have a proof of the proposition's negation).
+The following two examples both result in a \Verb"NotForAny" answer
+(in the examples we use the more traditional mathematical notation
+$ps \ent p$ for entailment)
 $$
 \begin{aligned}
       & \ent 2 + 3 = 6 &\mapsto~\mathtt{NotForAny}\\
@@ -96,8 +97,9 @@ $$
 & \ent x + y = 6     &\mapsto~\mathtt{NotForAll}
 \end{aligned}
 $$
-This results in \Verb"NotForAll" because without any assumptions the
-equation does not hold.  However some instantiations (e.g., $x = 2, y = 4$)
+This results in \Verb"NotForAll" because we cannot determine if the
+proposition holds without further assumptions about $x$ and $y$---%
+some instantiations (e.g., $x = 2, y = 4$)
 are entailed, while others (e.g., $x = 7, y = 3$) are not.
 
 Finally, the entailment function may give a positive answer, with an optional
@@ -137,8 +139,10 @@ invariant of the inert set:
 \begin{code}
 inert_prop :: InertSet -> Bool
 inert_prop props = all (isNotForAll . uncurry entails) $
-  [ (gs, g)                          | (g,gs) <- chooseProp (given props) ] ++
-  [ (unionProps ws (given props), w) | (w,ws) <- chooseProp (wanted props) ]
+  [ (gs, g)                   | (g, gs) <- chooseProp givens  ] ++
+  [ (unionProps ws givens, w) | (w, ws) <- chooseProp wanteds ]
+  where givens  = given props
+        wanteds = wanted props
 \end{code}
 
 The predicate consists of two parts, both of the same form:  the first one
@@ -146,12 +150,12 @@ asserts that the collection of given facts is consistent and non-redundant,
 while the second asserts the same property for the set of goals.
 The ``consistent and non-redundant'' property is captured
 by the requirement that when we use the entailment function we get
-the answer \Verb"NotForAll"---had we obtained \Verb"NotFroAny", we would
+the answer \Verb"NotForAll"---had we obtained \Verb"NotForAny", we would
 have a constradiction and hence the propositions would not be consistent,
-and if we ontained \Verb"YesIf", then then the proposition would
+and if we obtained \Verb"YesIf", then then the proposition would
 be redundant and hence may be eliminated.  The predicate makes use
-of the auxiliary function \Verb"choose", which extracts a single
-element from a list in all possible ways.
+of the auxiliary function \Verb"chooseProp", which extracts a single
+element from a collection in all possible ways.
 
 
 
@@ -185,14 +189,15 @@ addWorkItems ps is =
  case getProp (given ps) of
    Just (g,gs) ->
      do r <- addGiven g is
-        addWorkItems (unionPropSets (newWork r) ps { given = gs }) (newInert r)
+        addWorkItems (unionPropSets (newWork r) ps { given = gs })
+                     (newInert r)
 
    Nothing ->
      case getProp (wanted ps) of
        Just (w,ws) ->
          do r <- addWanted w is
             addWorkItems (unionPropSets (newWork r) ps { wanted = ws })
-                                                                  (newInert r)
+                         (newInert r)
        Nothing -> return is
 \end{code}
 
