@@ -1164,16 +1164,9 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > termToPat t                       = parens (numPat (text (show t)))
 >
 > eqnToPat :: Prop -> Pat
-> eqnToPat (Prop op ts)
->   | op `elem` [Add,Mul,Exp] = conPat "EqFun" (conPat con [] : pats)
->   | op `elem` [Leq,Eq]      = conPat con pats
->   | otherwise               = error "bug eqnToPat: unknown predicate"
->   where con   = opCon op
->         pats  = map termToPat ts
->
-> eqnToPatNoCon :: Prop -> [Pat]
-> eqnToPatNoCon (Prop _ ts) = map termToPat ts
->
+> eqnToPat (Prop op ts) = conPat "Prop" [ conPat (opCon op) []
+>                                       , listPat (map termToPat ts)
+>                                       ]
 > opCon :: Op -> String
 > opCon op =
 >   case op of
@@ -1193,13 +1186,8 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >     _ -> parens (text "num" <+> text (show t))
 >
 > eqnToExpr :: Prop -> Doc
-> eqnToExpr (Prop op ts) = parens (fun <+> hsep (map toExpr ts))
->   where
->   fun | op `elem` [Add,Mul,Exp] = text "EqFun" <+> con
->       | op `elem` [Leq,Eq]      = con
->       | otherwise               = error "bug: eqnToExp, unknown pred"
->   con = text (opCon op)
->
+> eqnToExpr (Prop op ts) = parens (text "Prop" <+> text (opCon op)
+>                                   <+> smallList (map toExpr ts))
 >
 > bruleToAlt :: BRule -> Doc
 > bruleToAlt r = text "{-" <+> bNotes r <+> text "-}"
@@ -1222,7 +1210,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > fruleFun (n,fs) = text "frule" <> int n <+> text " :: [Prop] -> Prop -> [Prop]" $$
 >               text "frule" <> int n <+> text "asmps" <+> text "new"
 >                 <+> text "=" <+> text "catMaybes"
->                       $$ nest 2 (ppList aux)
+>                       $$ nest 2 (smallList aux)
 >   $$ nest 2 (text "where" $$ vsep defs)
 >   where
 >   nameDef x f = let name = "try_" ++ show x
@@ -1303,11 +1291,11 @@ frule_Add_2_1_0_0_0 t1 t2 t3 =
 >     let eqn = Prop op (take ar $ map (Var . V . fruleVar) [ 0 .. ])
 >         ar  = arity op
 >     in eqnToPat eqn <+> text "->" <+> text "concat"
->        $$ nest 2 (ppList
+>        $$ nest 2 (bigList
 >                  $ do (_,rs) <- M.toList m1
 >                       return $ text "do" <+>
 >                         ( codeMatchProps ar (fPats (head rs))
->                           $$ text "concat" <+> ppList (map fruleCase rs)
+>                           $$ text "concat" <+> bigList (map fruleCase rs)
 >                         )
 >                  )
 
@@ -1315,9 +1303,12 @@ frule_Add_2_1_0_0_0 t1 t2 t3 =
 > ppTup :: [Doc] -> Doc
 > ppTup = parens . hsep . punctuate comma
 
-> ppList :: [Doc] -> Doc
-> ppList [] = text "[]"
-> ppList (x : xs) = (text "[" <+> x) $$
+> smallList :: [Doc] -> Doc
+> smallList ds = brackets $ fsep $ punctuate comma ds
+
+> bigList :: [Doc] -> Doc
+> bigList [] = text "[]"
+> bigList (x : xs) = (text "[" <+> x) $$
 >                   vcat [ comma <+> y | y <- xs ] $$
 >                   text "]"
 
@@ -1359,10 +1350,10 @@ Generates code search for assumptions of the appropriate "shape"
 >
 >   step op howMany vars0 = gen howMany initSrc vars0
 >     where
->     initSrc   = parens (char 'p' <> name <+> fruleAsmpsName)
->     nextSrc n = text "more" <> name <> int (howMany - n + 1)
+>     initSrc   = parens (text "getPropsFor" <+> con <+> fruleAsmpsName)
+>     nextSrc n = text "more" <> con <> int (howMany - n + 1)
 >
->     pats n = ppTup $ take ar [ text (fruleVar v) | v <- [ n .. ] ]
+>     pats n = listPat $ take ar [ text (fruleVar v) | v <- [ n .. ] ]
 >
 >     gen 0 _   vs = (vs, empty)
 >     gen 1 src vs = (vs + ar, pats vs <+> text "<-" <+> src)
@@ -1372,15 +1363,9 @@ Generates code search for assumptions of the appropriate "shape"
 >                       , parens (pats vs <> comma <> newSrc) <+>
 >                           text "<-" <+> text "choose" <+> src $$ stmts
 >                       )
->     ar    = arity op
->     name  = text (opTextName op)
+>     ar  = arity op
+>     con = text (opCon op)
 
-> opTextName op = case op of
->                   Add -> "Add"
->                   Mul -> "Mul"
->                   Exp -> "Exp"
->                   Leq -> "Leq"
->                   Eq  -> "Eq"
 
 
 --------------------------------------------------------------------------------

@@ -188,11 +188,11 @@ pEqn n =
     [ do (t1,op,t2,n',es1) <- pTerm pref 0
          tchar '='
          (t3,_,es2) <- pAtom pref n'
-         return (EqFun op t1 t2 t3 : es1 ++ es2)
+         return (Prop op [t1,t2,t3] : es1 ++ es2)
     , do (t1,n1,es1) <- pAtom pref 0
          r <- pRel
          (t2,_,es2) <- pAtom pref n1
-         return (r t1 t2 : es1 ++ es2)
+         return (Prop r [t1,t2] : es1 ++ es2)
     ]
   where pref = n
 
@@ -214,10 +214,10 @@ pAtom pref n =
             return (Var (a:as), n, [])
        , do (t1,op,t2,n',es) <- between (tchar '(') (tchar ')') (pTerm pref n)
             let x = Var (newVar pref n')
-            return (x, n'+1, EqFun op t1 t2 x : es)
+            return (x, n'+1, Prop op [t1,t2,x] : es)
        ]
 
-pRel :: ReadP (Term -> Term -> Prop)
+pRel :: ReadP Op
 pRel = msum [ tchar '=' >> return Eq
             , tchar '<' >> char '=' >> return Leq
             ]

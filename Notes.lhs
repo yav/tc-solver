@@ -20,7 +20,6 @@ module Notes where
 
 import Control.Monad(mzero,foldM,guard)
 import Test
-import Data.List(find,nub)
 import Debug.Trace
 \end{code}
 
@@ -308,65 +307,20 @@ And we can keep going like this, looping forever.
 \subsection{Substitutions}
 
 \begin{code}
-type Var    = Xi
-type Subst  = [ (Var,Term) ]
-
-compose :: Subst -> Subst -> Subst
-compose s2 s1 = [ (x, apSubst s2 t) | (x,t) <- s1 ] ++
-                [ (x,t) | (x,t) <- s2, all (not . eqType x . fst) s1 ]
-
-mgu :: Term -> Term -> Maybe Subst
-mgu x y | x == y  = return []
-mgu (Var x) t     = return [(x,t)] --- for simple terms no need to occur check
-mgu t (Var x)     = return [(x,t)]
-mgu _ _           = mzero
-
-class ApSubst t where
-  apSubst :: Subst -> t -> t
-
-instance ApSubst t => ApSubst [t] where
-  apSubst su ts = map (apSubst su) ts
-
-instance ApSubst Term where
-  apSubst su t@(Var x)  = case find (eqType x . fst) su of
-                            Just (_,t1) -> t1
-                            _ -> t
-  apSubst _ t           = t
-
-instance ApSubst Prop where
-  apSubst su (EqFun op x y z) = EqFun op (apSubst su x)
-                                             (apSubst su y)
-                                             (apSubst su z)
-  apSubst su (Eq x y)         = Eq (apSubst su x) (apSubst su y)
-  apSubst su (Leq x y)        = Leq (apSubst su x) (apSubst su y)
-
-instance ApSubst Props where
-  apSubst su ps = Props { pAdd = apSubst su (pAdd ps)
-                        , pMul = apSubst su (pMul ps)
-                        , pExp = apSubst su (pExp ps)
-                        , pLeq = apSubst su (pLeq ps)
-                        , pEq  = apSubst su (pEq ps)
-                        }
-
-instance (ApSubst a, ApSubst b) => ApSubst (a,b) where
-  apSubst su (x,y) = (apSubst su x, apSubst su y)
-
-instance (ApSubst a, ApSubst b, ApSubst c) => ApSubst (a,b,c) where
-  apSubst su (x,y,z) = (apSubst su x, apSubst su y, apSubst su z)
-
 substToEqns :: Subst -> [Prop]
-substToEqns su = [ Eq (Var x) t | (x,t) <- su ]
+substToEqns su = [ Prop Eq [Var x, t] | (x,t) <- su ]
 
 -- Turn the equations that we have into a substitution, and return
 -- the remaining propositions.
 improvingSubst :: Props -> Maybe (Subst, Props)
-improvingSubst ps  = do su <- loop [] (pEq ps)
+improvingSubst ps  = do su <- loop [] (getPropsFor Eq ps)
                         return (su, filterProp (not . trivial)
-                                   $ apSubst su ps { pEq = [] } )
+                                   $ apSubst su $ rmProps Eq ps)
   where
-  loop su ((x,y) : eqs) =
+  loop su ([x,y] : eqs) =
     do su1 <- mgu x y
        loop (compose su1 su) (apSubst su1 eqs)
+  loop _ (_ : _) = error "bug: improveSubst eqn of arity not 2"
   loop su [] = return su
 \end{code}
 
@@ -415,6 +369,7 @@ enatils_all_prop p ps q =
 \end{code}
 
 \begin{code}
+{-
 simpleEntails :: Prop -> Answer
 simpleEntails p =
   case p of
@@ -486,9 +441,11 @@ simpleEntails p =
       | y == z                      -> YesIf [ Eq x (num 1), Eq y (num 1),
                                                              Eq z (num 1) ]
       | otherwise                   -> NotForAll
+-}
 \end{code}
 
 \begin{code}
+{-
 extend0 prop =
   case prop of
     EqFun Add x y z           -> return [ Leq x z, Leq y z, EqFun Add y x z ]
@@ -501,7 +458,6 @@ extend0 prop =
     _                         -> return []
 
 
-{-
 extend1 :: Prop -> Prop -> Maybe [Prop]
 extend1 asmp prop =
   case prop of
@@ -628,7 +584,7 @@ trivial = solve noProps
 
 \begin{code}
 solve :: Props -> Prop -> Bool
-solve  _ (Eq x y) | x == y = True
+solve  _ (Prop Eq [x,y]) | x == y = True
 solve ps p = solve0 [] p || elemProp p ps
 
 
