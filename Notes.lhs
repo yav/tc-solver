@@ -205,19 +205,19 @@ Note that we start by first adding all assumptions, and only then we consider
 the goals because the assumptions might help us to solve the goals.
 
 
-\subsection{Adding a New Assumption}
+\subsection{Adding a New Assumption (given)}
 
 When we add a new assumption to an inert set we check for ``interactions''
-with the existing assumptions by using the entailment function:
+with the existing assumptions by using the entailment function.
 
 \begin{code}
 addGiven g props =
   case entails (given props) g of
 \end{code}
 
-The first possibility is that the new assumption is incompatable with
+The first possibility is that the new assumption is incompatible with
 the existing assumptions, in which case we simply report an error
-and ignore the new fact:
+and ignore the new fact.
 
 \begin{code}
     NotForAny -> mzero
@@ -250,19 +250,48 @@ new assumption.
 \end{code}
 
 
-\subsection{Adding a New Goal}
+\subsection{Adding a New Goal (wanted)}
+
+Extending the inert set with a new goal is a little more complex then
+adding a new assumption but the overall structure of the algorithm is similar.
+Again, we use the entailment function to check for interactions
+between the inert set and the new goal but we also use existing goals
+as assumptions.  This is useful because we may be able to discharge
+the new goal in terms of already existing goals, thus leaving the inert
+set unchanged.
 
 \begin{code}
 addWanted w props =
   case entails (unionProps (wanted props) (given props)) w of
+\end{code}
 
+The first two cases---when there is interaction---are the same as for
+adding an assumption:  inconsistencies result in an error, while solving
+the new goal does not affect the inert set but may add a new formulation
+of the goal to the work queue.
+
+\begin{code}
     NotForAny -> mzero
 
     YesIf ps -> return PassResult
       { newInert  = props
       , newWork   = emptyPropSet { wanted = propsList ps }
       }
+\end{code}
 
+The major difference in the algorithm is when there is no interaction
+between the new goal and the existing inert set.  In this case we
+add the new goal to the inert set but, in addition, we need to check
+if it is possible to solve any of the already existing goals in terms
+of the new goal.  We cannot simply add the existing goals back on the
+work queue (as we did when we added an assumption) because this may
+lead to a non-terminating loop:  any two goals that cannot be solved in terms
+of each other are going to keep restarting each other forever.  Instead,
+we examine the existing goals one at a time and check for interactions in
+the presence of the new goal, removing goals that are entailed, and leaving
+goals that result in no interaction in the inert set.
+
+\begin{code}
     NotForAll ->
       do let start = (addProp w noProps, noProps)
          (inert,restart) <- foldM check start (chooseProp (wanted props))
@@ -271,7 +300,13 @@ addWanted w props =
            { newInert = props { wanted = inert }
            , newWork  = emptyPropSet { wanted = restart }
            }
+\end{code}
 
+The function \Verb"check" has the details of how to check for interaction
+between some existing goal, \Verb"w1", and the new goal \Verb"w".  The
+set \Verb"ws" has all existing goals without the goal under consideration.
+
+\begin{code}
   where
   check (inert,restart) (w1,ws) =
     case entails (addProp w (unionProps ws (given props))) w1 of
@@ -279,6 +314,21 @@ addWanted w props =
       NotForAll -> return (addProp w1 inert, restart)
       YesIf ps  -> return (inert, foldr addProp restart ps)
 \end{code}
+
+To see the algorithm in action, consider the following example:
+\begin{example}
+New goal:   2 <= x
+Inert set:  { wanted = [1 <= x, x + 5 = y] }
+
+Step 1: entails [1 <= x, x + 5 = y] (2 <= x)      -->  NotForAll
+Step 2: Add (2 <= x) to the inert set and examine existing goals:
+  Step 2.1: entails [2 <= x, x + 5 = y] (1 <= x)  --> YesIf []  // remove
+  Step 2.2: entails [2 <= x, 1 <= x] (x + 5 = y)  --> NotForAll // keep
+
+New inert set: { wanted = [2 <= x, x + 5 = y] }
+\end{example}
+
+
 
 
 Note that it is important that when the solver answers \Verb"YesIf",
