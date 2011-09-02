@@ -459,14 +459,19 @@ closure :: Props -> Maybe (Subst, Props)
 closure ps = closure1 =<< improvingSubst ps
 
 closure1 :: (Subst, Props) -> Maybe (Subst, Props)
-closure1 (su0, ps0) =
-  do (su, ps) <- improvingSubst
-              $ propsFromList
-              $ do (q,qs) <- chooseProp ps0
-                   i      <- implied qs q
-                   guard (not (elemProp i ps0))
-                   return i
+closure1 (su0, ps0) = trace "clo1" $
+  do (su, ps) <- improvingSubst $
 
+          let zs =
+                propsFromList
+                $ do (q,qs) <- chooseProp ps0
+                     -- XXX: adding trivial facts, such as "2 ^ 0 = 1"
+                     -- seems to confuse "implied"
+                     i      <- trace (show (qs,q)) $ implied qs q
+                     -- trace (show i) $ guard (not (elemProp i ps0))
+                     guard (not (solve ps0 i))
+                     return i in seq zs $ trace "made it" zs
+  
      let su1 = compose su su0
          ps1 = apSubst su ps0
 
@@ -749,6 +754,8 @@ instance ApSubst Prop where
 instance ApSubst Props where
   apSubst su (P ps) = P (M.map (apSubst su) ps)
 
+instance Show Props where
+  show = show . propsToList
 
 \end{code}
 
