@@ -15,7 +15,6 @@ import System.Exit(ExitCode(..))
 import Text.ParserCombinators.ReadP
 
 import Notes
-import Test
 
 
 port :: PortNumber
@@ -71,8 +70,8 @@ initS = S { entered = M.empty, inertSet = Just emptyPropSet }
 
 addWorkItemsUI :: [WorkItem] -> PropSet -> Maybe PropSet
 addWorkItemsUI ws is = addWorkItems set is
-  where set = PropSet { wanted = propsList [ w | (Wanted,w) <- ws ]
-                      , given  = propsList [ g | (Given,g) <- ws ]
+  where set = PropSet { wanted = propsFromList [ w | (Wanted,w) <- ws ]
+                      , given  = propsFromList [ g | (Given,g) <- ws ]
                       }
 
 processCmd :: Cmd -> S -> S

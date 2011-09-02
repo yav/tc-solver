@@ -1,3 +1,4 @@
+
 \documentclass{article}
 
 \usepackage{fancyvrb}
@@ -8,6 +9,7 @@
 
 \newcommand{\To}{\Rightarrow}
 \newcommand{\ent}{\vdash}
+\newcommand{\ignore}[1]{}
 
 
 \begin{document}
@@ -16,22 +18,115 @@
 This document is a literate Haskell file.
 
 \begin{code}
+{-# LANGUAGE CPP #-}
 module Notes where
 
 import Control.Monad(mzero,foldM,guard)
-import Test
 import Debug.Trace
+import qualified Data.Map as M
+import Data.List(union,find)
 \end{code}
 
 
 
 \subsection{Sets of Propositions}
 
+Throughout the development we work with collections of propositions.
+One way to represent such collections is to simply use linked lists.
+However, because we often need to search for propositions
+of a certain form, it is more convenient (and efficient) to group
+propositions with the same predicate constructor together.
+
+We use a finite map to associate the predicate constructor for each proposition
+with a list containing the arguments of the propositions in the collection.
+The function \Verb"propsToList" shows how to recover the original list
+of propositions from the grouped representation.
+
+\begin{code}
+newtype Props = P (M.Map Op [[Term]])
+
+propsToList :: Props -> [Prop]
+propsToList (P ps) = [ Prop op ts | (op,tss) <- M.toList ps, ts <- tss ]
+\end{code}
+
+The functions for constructing sets of propositions are mostly directly
+derived from the corresponding functions on finite maps.
+
+\begin{code}
+noProps :: Props
+noProps = P M.empty
+
+addProp :: Prop -> Props -> Props
+addProp (Prop op ts) (P props) = P (M.insertWith union op [ts] props)
+
+propsFromList :: [Prop] -> Props
+propsFromList = foldr addProp noProps
+
+unionProps :: Props -> Props -> Props
+unionProps (P as) (P bs) = P (M.unionWith union as bs)
+\end{code}
+
+Next we have some functions for selecting propositions from a collection.
+The function \Verb"getProp" selects one of the propositions in the collection
+and returns the remaining propositions.  The funciton \Verb"chooseProp"
+is similar but it selects one proposition in every possible way.
+The function \Verb"getPropsFor" returns (the arguments of) the propositions
+that are constructed with a specific predicate.
+
+\begin{code}
+getProp :: Props -> Maybe (Prop, Props)
+getProp (P ps) =
+  do ((op,t:ts),qs) <- M.minViewWithKey ps
+     return (Prop op t, if null ts then P qs else P (M.insert op ts qs))
+
+chooseProp :: Props -> [(Prop,Props)]
+chooseProp ps =
+  case getProp ps of
+    Nothing -> []
+    Just (q,qs) -> (q,qs) : [ (a,addProp q as) | (a,as) <- chooseProp qs ]
+
+getPropsFor :: Op -> Props -> [[Term]]
+getPropsFor op (P ps) = M.findWithDefault [] op ps
+\end{code}
+
+
+Occasionally we need to query a collection to see if
+it is empty or if it contains a given proposition:
+
+\begin{code}
+elemProp      :: Prop -> Props -> Bool
+elemProp (Prop op ts) (P ps) = case M.lookup op ps of
+                                 Nothing  -> False
+                                 Just tss -> elem ts tss
+
+isEmpty :: Props -> Bool
+isEmpty (P ps) = M.null ps
+\end{code}
+
+Finally, we also need some functions to remove propositions from a collection.
+The functoin \Verb"filterProp" removes propositions that do not satisfy
+a given general predicate, while \Verb"rmPropsFor" is a special case of
+\Verb"filterProp", which removes propositions constructed with a given
+predicate.
+
+\begin{code}
+filterProp :: (Prop -> Bool) -> Props -> Props
+filterProp p (P ps) = P (M.mapMaybeWithKey upd ps)
+  where upd op ts = case filter (p . Prop op) ts of
+                      [] -> Nothing
+                      xs -> Just xs
+
+rmPropsFor :: Op -> Props -> Props
+rmPropsFor op (P as) = P (M.delete op as)
+\end{code}
+
+
+
+\subsection{Assumptions and Goals}
+
 The solver manipulates two kinds of propositions: {\em given} propositions
 correspond to assumptions that may be used without proof,
 while {\em wanted} propositions correspond to goals that need to be proved.
-When working with collections of properties, it is convenient to group
-the assumptions and goals separately:
 
 \begin{code}
 data PropSet = PropSet { given :: Props, wanted :: Props }
@@ -50,8 +145,6 @@ unionPropSets ps1 ps2 = PropSet { given  = unionProps (given ps1) (given ps2)
                                 , wanted = unionProps (wanted ps1) (wanted ps2)
                                 }
 \end{code}
-
-
 \subsection{Entailment}
 
 A central component of the solver is the entailment function, which determines
@@ -231,7 +324,7 @@ as new work to be processed by the solver.
 \begin{code}
     YesIf ps -> return PassResult
       { newInert  = props
-      , newWork   = emptyPropSet { given = propsList ps }
+      , newWork   = emptyPropSet { given = propsFromList ps }
       }
 \end{code}
 
@@ -275,7 +368,7 @@ of the goal to the work queue.
 
     YesIf ps -> return PassResult
       { newInert  = props
-      , newWork   = emptyPropSet { wanted = propsList ps }
+      , newWork   = emptyPropSet { wanted = propsFromList ps }
       }
 \end{code}
 
@@ -328,20 +421,85 @@ Step 2: Add (2 <= x) to the inert set and examine existing goals:
 New inert set: { wanted = [2 <= x, x + 5 = y] }
 \end{example}
 
+\subsection{The Entailment Function}
+
+\begin{code}
+entails ps p | tr "entails?:" (propsToList ps)
+             $ trace "  --------"
+             $ trace ("  " ++ show p) False = undefined
+entails ps' p' =
+  case closure ps' of
+    Nothing -> YesIf [] -- Assumed False
+    Just (su,ps) ->
+      let p = apSubst su p'
+      in if solve ps p
+            then YesIf []
+
+            -- Try improvement
+            else case closure (addProp p ps) of
+                   Nothing -> NotForAny
+                   Just (su1,_)
+
+                     -- The extra facts helped
+                     | solve (apSubst su1 ps) (apSubst su1 p)
+                    && not (p' `elem` eqns) -> YesIf eqns
+
+                     -- No luck
+                     | p == p'   -> NotForAll
+
+                     -- Keep going with improved proposition
+                     | otherwise -> YesIf [p]
+                     where eqns = substToEqns su1
+
+\end{code}
+
+
+\begin{code}
+closure :: Props -> Maybe (Subst, Props)
+closure ps = closure1 =<< improvingSubst ps
+
+closure1 :: (Subst, Props) -> Maybe (Subst, Props)
+closure1 (su0, ps0) =
+  do (su, ps) <- improvingSubst
+              $ propsFromList
+              $ do (q,qs) <- chooseProp ps0
+                   i      <- implied qs q
+                   guard (not (elemProp i ps0))
+                   return i
+
+     let su1 = compose su su0
+         ps1 = apSubst su ps0
+
+     if isEmpty ps
+       then tr "computed closure:" (propsToList ps1)
+           $ return (su1, ps1)
+       else tr "adding:" (propsToList ps) $ closure1 (su1, unionProps ps ps1)
+
+\end{code}
 
 
 
-Note that it is important that when the solver answers \Verb"YesIf",
-the sub-goals should be simpler than the original in some way.  This
-avoids non-terminating loops of the following form:
+\subsection{Proprties of the Entailment Function}
 
-\begin{example}
-entails [p] q   = NotForAll
-entails [q] p   = YesIf [p1]
-entails [q] p1  = NotForAll
-entails [p1] q  = YesIf [q1]
-etc.
-\end{example}
+Adding more assumptions cannot make things less contradictory
+\begin{code}
+entails_any_prop :: Props -> Prop -> Prop -> Bool
+entails_any_prop ps q p =
+  case entails ps q of
+    NotForAny -> isNotForAny (entails (addProp p ps) q)
+    _         -> True
+\end{code}
+
+Dropping assumptions cannot make things more contradictory or more
+defined.
+\begin{code}
+enatils_all_prop :: Prop -> Props -> Prop -> Bool
+enatils_all_prop p ps q =
+  case entails (addProp p ps) q of
+    NotForAll -> isNotForAll (entails ps q)
+    _         -> True
+\end{code}
+
 
 
 
@@ -382,6 +540,22 @@ Now we have a new wanted goal "y + x = z".
 And we can keep going like this, looping forever.
 
 
+\subsection{Termination}
+Note that it is important that when the solver answers \Verb"YesIf",
+the sub-goals should be simpler than the original in some way.  This
+avoids non-terminating loops of the following form:
+
+\begin{example}
+entails [p] q   = NotForAll
+entails [q] p   = YesIf [p1]
+entails [q] p1  = NotForAll
+entails [p1] q  = YesIf [q1]
+etc.
+\end{example}
+
+
+
+
 \subsection{Substitutions}
 
 \begin{code}
@@ -393,7 +567,7 @@ substToEqns su = [ Prop Eq [Var x, t] | (x,t) <- su ]
 improvingSubst :: Props -> Maybe (Subst, Props)
 improvingSubst ps  = do su <- loop [] (getPropsFor Eq ps)
                         return (su, filterProp (not . trivial)
-                                   $ apSubst su $ rmProps Eq ps)
+                                   $ apSubst su $ rmPropsFor Eq ps)
   where
   loop su ([x,y] : eqs) =
     do su1 <- mgu x y
@@ -424,150 +598,6 @@ new_asmp = CongFunEq op p refl refl old_asmp
 
 
 \end{example}
-
-
-
-Adding more assumptions cannot make things less contradictory
-\begin{code}
-entails_any_prop :: Props -> Prop -> Prop -> Bool
-entails_any_prop ps q p =
-  case entails ps q of
-    NotForAny -> isNotForAny (entails (addProp p ps) q)
-    _         -> True
-\end{code}
-
-Dropping assumptions cannot make things more contradictory or more
-defined.
-\begin{code}
-enatils_all_prop :: Prop -> Props -> Prop -> Bool
-enatils_all_prop p ps q =
-  case entails (addProp p ps) q of
-    NotForAll -> isNotForAll (entails ps q)
-    _         -> True
-\end{code}
-
-\begin{code}
-{-
-extend0 prop =
-  case prop of
-    EqFun Add x y z           -> return [ Leq x z, Leq y z, EqFun Add y x z ]
-    EqFun Mul x y z
-      | Num m _ <- x, 1 <= m  -> return [ Leq y z, EqFun Mul y x z ]
-      | otherwise             -> return [ EqFun Mul y x z ]
-    EqFun Exp x y z
-      | Num m _ <- x, 2 <= m  -> return [ Leq y z ]
-      | Num m _ <- y, 1 <= m  -> return [ Leq x z ]
-    _                         -> return []
-
-
-extend1 :: Prop -> Prop -> Maybe [Prop]
-extend1 asmp prop =
-  case prop of
-
-    Leq x y
-      | Leq a (Num m _) <- prop, Num n _ <- x, m <= n -> return [ Leq a y ]
-      | Leq (Num m _) a <- prop, Num n _ <- y, n <= m -> return [ Leq y a ]
-      | Leq y' z        <- prop, y == y'              -> return [ Leq x z ]
-      | Leq a x'        <- prop, x == x'              -> return [ Leq a y ]
-      | Leq y' x'       <- prop, x == x', y == y'     -> return [ Eq x y ]
-
-    EqFun Add x y z
-      | EqFun Add x' y' z' <- prop, x == x', y == y'  -> return [ Eq z z' ]
-      | EqFun Add x' y' z' <- prop, x == x', z == z'  -> return [ Eq y y' ]
-      | EqFun Add x' y' z' <- prop, y == y', z == z'  -> return [ Eq x x' ]
-
-    EqFun Mul x y z
-      | EqFun Mul x' y' z' <- prop, x == x', y == y'  -> return [ Eq z z' ]
-
-    EqFun Mul (Num m _) y z
-      | EqFun Mul (Num m' _) y' z' <- prop, 1 <= m, m == m', z == z'
-                                                      -> return [ Eq y y' ]
-
-    EqFun Exp x y z
-      | EqFun Exp x' y' z' <- prop, x == x', y == y'  -> return [ Eq z z' ]
-
-    EqFun Exp (Num m _) y z
-      | EqFun Exp (Num m' _) y' z' <- prop, 2 <= m, m == m', z == z'
-                                                      -> return [ Eq y y' ]
-    EqFun Exp x (Num m _) z
-      | EqFun Exp x' (Num m' _) z' <- prop, 1 <= m, m == m', z == z'
-                                                      -> return [ Eq x x' ]
-
-    -- 5 + x = y & 7 + x = z  --> 2 + y = z
-    EqFun Add (Num m _) y z
-      | EqFun Add (Num n _) y' z' <- prop, y == y' ->
-        if m >= n then return [ EqFun Add (num (m - n)) z' z ]
-                  else return [ EqFun Add (num (n - m)) z z' ]
-
-    -- 5 + x = y & 7 + y = z   --> 13 + x = z
-    EqFun Add (Num m _) x y
-      | EqFun Add (Num n _) y' z <- prop, y == y' ->
-                                        return [ EqFun Add (num (m + n)) x z ]
-
-    EqFun Add (Num n _) y' z
-      | EqFun Add (Num m _) x y <- prop, y == y' ->
-                                        return [ EqFun Add (num (m + n)) x z ]
-
-{-
-    EqFun Add x y (Num m _)
-      | EqFun Add x' y' (Num n _)
-
-
-    -- x + y = 5, x + y' = 7 --> y + 2 = y'
-
-    -- x + y + 2 = x + y'
--}
-    _ -> return []
--}
-
-
-\end{code}
-
-\begin{code}
-entails ps p | tr "entails?:" (propsToList ps)
-             $ trace "  --------"
-             $ trace ("  " ++ show p) False = undefined
-entails ps' p' =
-  case closure ps' of
-    Nothing -> error "bug: Inert invariant failed!"
-    Just (su,ps) ->
-      let p = apSubst su p'
-      in if solve ps p
-            then trace "yes!" $ YesIf []
-            else trace "try improvement" $
-                 case closure (addProp p ps) of
-                   Nothing -> trace "definately not" NotForAny
-                   Just (su1,_)
-                     | solve (apSubst su1 ps) (apSubst su1 p)
-                    && not (p' `elem` eqns) ->
-                         trace "yes!" YesIf eqns
-                     | p == p'   -> trace "no" NotForAll
-                     | otherwise -> YesIf [p]
-                     where eqns = substToEqns su1
-
-
-
-closure :: Props -> Maybe (Subst, Props)
-closure ps = closure1 =<< improvingSubst ps
-
-closure1 :: (Subst, Props) -> Maybe (Subst, Props)
-closure1 (su0, ps0) =
-  do (su, ps) <- improvingSubst
-              $ propsList
-              $ do (q,qs) <- chooseProp ps0
-                   i      <- implied qs q
-                   guard (not (elemProp i ps0))
-                   return i
-
-     let su1 = compose su su0
-         ps1 = apSubst su ps0
-
-     if isEmpty ps
-       then tr "computed closure:" (propsToList ps1)
-           $ return (su1, ps1)
-       else tr "adding:" (propsToList ps) $ closure1 (su1, unionProps ps ps1)
-
-\end{code}
 
 
 \begin{code}
@@ -608,6 +638,131 @@ tr x ys z = trace x (trace msg z)
                 _  -> unlines [ "  " ++ show y | y <- ys ]
 
 \end{code}
+
+\begin{code}
+
+
+{-
+module Test where
+
+import Data.List(union,find)
+import Control.Monad(mzero)
+import qualified Data.Map as M
+-}
+
+type Xi = String
+
+data Term = Var Xi | Num Integer (Maybe Xi)
+            deriving (Eq,Ord)
+
+data Op   = Add | Mul | Exp | Leq | Eq deriving (Eq, Ord)
+data Prop = Prop Op [Term]
+            deriving Eq
+
+instance Show Term where
+  show (Var x)    = x
+  show (Num x _)  = show x
+
+instance Show Op where
+  show Add = "+"
+  show Mul = "*"
+  show Exp = "^"
+  show Leq = "<="
+  show Eq  = "=="
+
+instance Show Prop where
+
+  show (Prop op [t1,t2,t3])
+    | op == Add || op == Mul || op == Exp =
+      show t1 ++ " " ++ show op ++ " " ++ show t2
+                                ++ " == " ++ show t3
+  show (Prop op [t1,t2])
+    | op == Leq || op == Eq = show t1 ++ " " ++ show op ++ " " ++ show t2
+
+  show (Prop op ts) = show op ++ " " ++ unwords (map show ts)
+
+eqType :: Xi -> Xi -> Bool
+eqType = (==)
+
+num :: Integer -> Term
+num n = Num n Nothing
+
+minus :: Integer -> Integer -> Maybe Integer
+minus x y = if x >= y then Just (x - y) else Nothing
+
+descreteRoot :: Integer -> Integer -> Maybe Integer
+descreteRoot root x0 = search 0 x0
+  where
+  search from to = let x = from + div (to - from) 2
+                       a = x ^ root
+                   in case compare a x0 of
+                        EQ              -> Just x
+                        LT | x /= from  -> search x to
+                        GT | x /= to    -> search from x
+                        _               -> Nothing
+
+descreteLog :: Integer -> Integer -> Maybe Integer
+descreteLog _    0   = Just 0
+descreteLog base x0 | base == x0  = Just 1
+descreteLog base x0 = case divMod x0 base of
+                         (x,0) -> fmap (1+) (descreteLog base x)
+                         _     -> Nothing
+
+divide :: Integer -> Integer -> Maybe Integer
+divide _ 0  = Nothing
+divide x y  = case divMod x y of
+                (a,0) -> Just a
+                _     -> Nothing
+
+choose :: [a] -> [(a,[a])]
+choose []     = []
+choose (x:xs) = (x,xs) : [ (y, x:ys) | (y,ys) <- choose xs ]
+
+type Var    = Xi
+type Subst  = [ (Var,Term) ]
+
+compose :: Subst -> Subst -> Subst
+compose s2 s1 = [ (x, apSubst s2 t) | (x,t) <- s1 ] ++
+                [ (x,t) | (x,t) <- s2, all (not . eqType x . fst) s1 ]
+
+mgu :: Term -> Term -> Maybe Subst
+mgu x y | x == y  = return []
+mgu (Var x) t     = return [(x,t)] --- for simple terms no need to occur check
+mgu t (Var x)     = return [(x,t)]
+mgu _ _           = mzero
+
+class ApSubst t where
+  apSubst :: Subst -> t -> t
+
+instance ApSubst t => ApSubst [t] where
+  apSubst su ts = map (apSubst su) ts
+
+instance ApSubst Term where
+  apSubst su t@(Var x)  = case find (eqType x . fst) su of
+                            Just (_,t1) -> t1
+                            _ -> t
+  apSubst _ t           = t
+
+instance ApSubst Prop where
+  apSubst su (Prop op ts) = Prop op (map (apSubst su) ts)
+
+instance ApSubst Props where
+  apSubst su (P ps) = P (M.map (apSubst su) ps)
+
+
+\end{code}
+
+
+
+\ignore{
+\begin{code}
+-- XXX: The path is hardcoded for the moment because
+-- literate scripts and CPP do not seem to work together properly.
+#include </home/diatchki/src/solver/TcTypeNatsRules.hs>
+\end{code}
+}
+
+
 
 
 \end{document}
