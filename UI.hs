@@ -14,7 +14,7 @@ import System.Process
 import System.Exit(ExitCode(..))
 import Text.ParserCombinators.ReadP
 
-import Notes
+import TcTypeNats
 
 
 port :: PortNumber
@@ -195,7 +195,7 @@ pEqn n =
     ]
   where pref = n
 
-pTerm :: Int -> Int -> ReadP (Term,Op,Term,Int,[Prop])
+pTerm :: Int -> Int -> ReadP (Term,Pred,Term,Int,[Prop])
 pTerm pref n0 =
   do (t1,n1,es1) <- pAtom pref n0
      op <- pOp
@@ -216,12 +216,12 @@ pAtom pref n =
             return (x, n'+1, Prop op [t1,t2,x] : es)
        ]
 
-pRel :: ReadP Op
+pRel :: ReadP Pred
 pRel = msum [ tchar '=' >> return Eq
             , tchar '<' >> char '=' >> return Leq
             ]
 
-pOp :: ReadP Op
+pOp :: ReadP Pred
 pOp = msum [ tchar '+' >> return Add
            , tchar '*' >> return Mul
            , tchar '^' >> return Exp
