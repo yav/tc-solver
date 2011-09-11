@@ -274,7 +274,10 @@ element from a collection in all possible ways.  -}
 addGiven  :: Prop -> InertSet -> Maybe PassResult
 addWanted :: Prop -> InertSet -> Maybe PassResult
 
-data PassResult = PassResult { newInert :: InertSet, newWork :: PropSet }
+data PassResult = PassResult { newInert :: Maybe InertSet -- Nothing: no change
+                             , newWork  :: PropSet
+                             , whatNext :: Maybe Prop -- Nothing = Solved
+                             }
 
 
 
@@ -302,8 +305,9 @@ the inert set unmodified but we record the alternative formulation (if any)
 as new work to be processed by the solver. -}
 
     YesIf ps -> return PassResult
-      { newInert  = props
+      { newInert  = Nothing
       , newWork   = emptyPropSet { given = propsFromList ps }
+      , whatNext  = Nothing
       }
 
 {- Finally, if entailment yielded no interaction, then we add the new fact to
@@ -312,10 +316,9 @@ back to the work queue so that we can re-process them in the context of the
 new assumption. -}
 
     NotForAll -> return PassResult
-      { newInert  = PropSet { wanted = noProps
-                            , given = addProp g (given props)
-                            }
+      { newInert  = Just props { wanted = noProps }
       , newWork   = props { given = noProps }
+      , whatNext  = Just g
       }
 
 
@@ -343,8 +346,9 @@ of the goal to the work queue. -}
     NotForAny -> mzero
 
     YesIf ps -> return PassResult
-      { newInert  = props
+      { newInert  = Nothing
       , newWork   = emptyPropSet { wanted = propsFromList ps }
+      , whatNext  = Nothing
       }
 
 {- The major difference in the algorithm is when there is no interaction
@@ -360,12 +364,14 @@ the presence of the new goal, removing goals that are entailed, and leaving
 goals that result in no interaction in the inert set. -}
 
     NotForAll ->
-      do let start = (addProp w noProps, noProps)
+      do let start = (noProps, noProps)
          (inert,restart) <- foldM check start (chooseProp (wanted props))
 
          return PassResult
-           { newInert = props { wanted = inert }
+           { newInert = if isEmpty restart then Nothing
+                                           else Just props { wanted = inert }
            , newWork  = emptyPropSet { wanted = restart }
+           , whatNext = Just w
            }
 
 {- The function \Verb"check" has the details of how to check for interaction
@@ -576,16 +582,25 @@ addWorkItems ps is =
  case getProp (given ps) of
    Just (g,gs) ->
      do r <- addGiven g is
-        addWorkItems (unionPropSets (newWork r) ps { given = gs })
-                     (newInert r)
+        let js = mkInert insertGiven r
+        addWorkItems (unionPropSets (newWork r) ps { given = gs }) js
 
    Nothing ->
      case getProp (wanted ps) of
        Just (w,ws) ->
          do r <- addWanted w is
-            addWorkItems (unionPropSets (newWork r) ps { wanted = ws })
-                         (newInert r)
+            let js = mkInert insertWanted r
+            addWorkItems (unionPropSets (newWork r) ps { wanted = ws }) js
        Nothing -> return is
+
+  where
+  addIfAny _ Nothing js     = js
+  addIfAny add (Just i) js  = add i js
+
+  mkInert add r = addIfAny add (whatNext r) $ case newInert r of
+                                                Nothing -> is
+                                                Just js -> js
+
 
 --------------------------------------------------------------------------------
 #else
