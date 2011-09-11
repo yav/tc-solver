@@ -1091,7 +1091,10 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > conPat n ps = text n <+> fsep ps
 >
 > numPat :: Pat -> Pat
-> numPat p    = conPat "Num" [ p, char '_' ]
+> numPat p    = conPat "Num" [ p, wildPat ]
+>
+> wildPat :: Pat
+> wildPat = char '_'
 >
 > tuplePat :: [Pat] -> Pat
 > tuplePat ps = parens $ fsep $ punctuate comma ps
@@ -1126,7 +1129,8 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > termToPat t                       = parens (numPat (text (show t)))
 >
 > eqnToPat :: Prop -> Pat
-> eqnToPat (Prop op ts) = conPat "Prop" [ conPat (opCon op) []
+> eqnToPat (Prop op ts) = conPat "Prop" [ wildPat
+>                                       , conPat (opCon op) []
 >                                       , listPat (map termToPat ts)
 >                                       ]
 > opCon :: Op -> String
@@ -1147,8 +1151,9 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >     Var x | not (numV x) -> text (show x)
 >     _ -> parens (text "num" <+> text (show t))
 >
+> -- XXX: Add an appropriate name, reflecting the proof method.
 > eqnToExpr :: Prop -> Doc
-> eqnToExpr (Prop op ts) = parens (text "Prop" <+> text (opCon op)
+> eqnToExpr (Prop op ts) = parens (text "Prop Nothing" <+> text (opCon op)
 >                                   <+> smallList (map toExpr ts))
 >
 > bruleToAlt :: BRule -> Doc

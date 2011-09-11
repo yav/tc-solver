@@ -5,12 +5,15 @@ import Control.Monad(mzero,foldM,guard)
 import Debug.Trace
 import qualified Data.Map as M
 import Data.List(union,find)
+import Data.Maybe(mapMaybe)
 
 {-------------------------------------------------------------------------------
 Terms and Propositions
 -------------------------------------------------------------------------------}
 
 type Var  = Xi
+
+type GoalName = String
 
 -- | The 'Xi' in the 'Num' constructor stores the original 'Xi' type that
 -- gave rise to the num.  It is there in an attempt to preserve type synonyms.
@@ -21,8 +24,10 @@ data Term = Var Var
 data Pred = Add | Mul | Exp | Leq | Eq
             deriving (Eq, Ord)
 
-data Prop = Prop Pred [Term]
-            deriving Eq
+data Prop = Prop { propName :: Maybe GoalName
+                 , propPred :: Pred
+                 , propArgs :: [Term]
+                 } deriving Eq
 
 num :: Integer -> Term
 num n = Num n Nothing
@@ -40,14 +45,14 @@ instance Show Pred where
 
 instance Show Prop where
 
-  show (Prop op [t1,t2,t3])
+  show (Prop _ op [t1,t2,t3])
     | op == Add || op == Mul || op == Exp =
       show t1 ++ " " ++ show op ++ " " ++ show t2
                                 ++ " == " ++ show t3
-  show (Prop op [t1,t2])
+  show (Prop _ op [t1,t2])
     | op == Leq || op == Eq = show t1 ++ " " ++ show op ++ " " ++ show t2
 
-  show (Prop op ts) = show op ++ " " ++ unwords (map show ts)
+  show (Prop _ op ts) = show op ++ " " ++ unwords (map show ts)
 
 
 
@@ -61,14 +66,13 @@ of a certain form, it is more convenient (and efficient) to group
 propositions with the same predicate constructor together.
 -------------------------------------------------------------------------------}
 
--- | We use a finite map to associate the predicate constructor for
--- each proposition with a list containing the arguments of the
--- propositions in the collection.
-newtype Props = P (M.Map Pred [[Term]])
+-- | We use a finite map that maps predicate constructors to the
+-- propositions made with the corresponding constructor.
+newtype Props = P (M.Map Pred [Prop])
 
 -- | Convert a set of propositions back into its list representation.
 propsToList :: Props -> [Prop]
-propsToList (P ps) = [ Prop op ts | (op,tss) <- M.toList ps, ts <- tss ]
+propsToList (P ps) = concat (M.elems ps)
 
 -- | An empty set of propositions.
 noProps :: Props
@@ -76,7 +80,7 @@ noProps = P M.empty
 
 -- | Add a proposition to an existing set.
 addProp :: Prop -> Props -> Props
-addProp (Prop op ts) (P props) = P (M.insertWith union op [ts] props)
+addProp p (P props) = P (M.insertWith union (propPred p) [p] props)
 
 -- | Convert a list of propositions into a set.
 propsFromList :: [Prop] -> Props
@@ -92,7 +96,7 @@ unionProps (P as) (P bs) = P (M.unionWith union as bs)
 getProp :: Props -> Maybe (Prop, Props)
 getProp (P ps) =
   do ((op,t:ts),qs) <- M.minViewWithKey ps
-     return (Prop op t, if null ts then P qs else P (M.insert op ts qs))
+     return (t, if null ts then P qs else P (M.insert op ts qs))
 
 -- | Pick one of the propositions from a set in all possible ways.
 chooseProp :: Props -> [(Prop,Props)]
@@ -104,13 +108,11 @@ chooseProp ps =
 -- | Get the arguments of propositions constructed with a given
 -- predicate constructor.
 getPropsFor :: Pred -> Props -> [[Term]]
-getPropsFor op (P ps) = M.findWithDefault [] op ps
+getPropsFor op (P ps) = map propArgs (M.findWithDefault [] op ps)
 
 -- | Returns 'True' if the proposition belongs to the set.
 elemProp      :: Prop -> Props -> Bool
-elemProp (Prop op ts) (P ps) = case M.lookup op ps of
-                                 Nothing  -> False
-                                 Just tss -> elem ts tss
+elemProp p ps = propArgs p `elem` getPropsFor (propPred p) ps
 
 -- | Returns 'True' if the set is empty.
 isEmpty :: Props -> Bool
@@ -119,7 +121,7 @@ isEmpty (P ps) = M.null ps
 -- | Remove propositions that do not satisfy the given predicate.
 filterProp :: (Prop -> Bool) -> Props -> Props
 filterProp p (P ps) = P (M.mapMaybeWithKey upd ps)
-  where upd op ts = case filter (p . Prop op) ts of
+  where upd op ts = case filter p ts of
                       [] -> Nothing
                       xs -> Just xs
 
@@ -274,9 +276,9 @@ element from a collection in all possible ways.  -}
 addGiven  :: Prop -> InertSet -> Maybe PassResult
 addWanted :: Prop -> InertSet -> Maybe PassResult
 
-data PassResult = PassResult { newInert :: Maybe InertSet -- Nothing: no change
-                             , newWork  :: PropSet
-                             , whatNext :: Maybe Prop -- Nothing = Solved
+data PassResult = PassResult { dropWanted :: [GoalName]
+                             , newWork    :: PropSet
+                             , consumed   :: Bool
                              }
 
 
@@ -305,9 +307,9 @@ the inert set unmodified but we record the alternative formulation (if any)
 as new work to be processed by the solver. -}
 
     YesIf ps -> return PassResult
-      { newInert  = Nothing
-      , newWork   = emptyPropSet { given = propsFromList ps }
-      , whatNext  = Nothing
+      { dropWanted  = []
+      , newWork     = emptyPropSet { given = propsFromList ps }
+      , consumed    = True
       }
 
 {- Finally, if entailment yielded no interaction, then we add the new fact to
@@ -316,9 +318,9 @@ back to the work queue so that we can re-process them in the context of the
 new assumption. -}
 
     NotForAll -> return PassResult
-      { newInert  = Just props { wanted = noProps }
-      , newWork   = props { given = noProps }
-      , whatNext  = Just g
+      { dropWanted  = mapMaybe propName (propsToList (wanted props))
+      , newWork     = props { given = noProps }
+      , consumed    = False
       }
 
 
@@ -346,9 +348,9 @@ of the goal to the work queue. -}
     NotForAny -> mzero
 
     YesIf ps -> return PassResult
-      { newInert  = Nothing
-      , newWork   = emptyPropSet { wanted = propsFromList ps }
-      , whatNext  = Nothing
+      { dropWanted = []
+      , newWork    = emptyPropSet { wanted = propsFromList ps }
+      , consumed   = True
       }
 
 {- The major difference in the algorithm is when there is no interaction
@@ -364,14 +366,13 @@ the presence of the new goal, removing goals that are entailed, and leaving
 goals that result in no interaction in the inert set. -}
 
     NotForAll ->
-      do let start = (noProps, noProps)
-         (inert,restart) <- foldM check start (chooseProp (wanted props))
+      do let start = ([], noProps)
+         (dropped,restart) <- foldM check start (chooseProp (wanted props))
 
          return PassResult
-           { newInert = if isEmpty restart then Nothing
-                                           else Just props { wanted = inert }
-           , newWork  = emptyPropSet { wanted = restart }
-           , whatNext = Just w
+           { dropWanted = dropped
+           , newWork    = emptyPropSet { wanted = restart }
+           , consumed   = False
            }
 
 {- The function \Verb"check" has the details of how to check for interaction
@@ -379,11 +380,16 @@ between some existing goal, \Verb"w1", and the new goal \Verb"w".  The
 set \Verb"ws" has all existing goals without the goal under consideration. -}
 
   where
-  check (inert,restart) (w1,ws) =
+  check (dropped, new) (w1,ws) =
     case entails (addProp w (unionProps ws (given props))) w1 of
       NotForAny -> mzero
-      NotForAll -> return (addProp w1 inert, restart)
-      YesIf ps  -> return (inert, foldr addProp restart ps)
+      NotForAll -> return (dropped, new)
+      YesIf ps  -> return (propName' w1 : dropped, foldr addProp new ps)
+
+  -- XXX: It would be better to ensure that this does not happen statically.
+  propName' p = case propName p of
+                  Just x  -> x
+                  Nothing -> error "bug: member of inert with no name"
 
 
 {- To see the algorithm in action, consider the following example:
@@ -510,15 +516,16 @@ instance ApSubst Term where
   apSubst _ t           = t
 
 instance ApSubst Prop where
-  apSubst su (Prop op ts) = Prop op (map (apSubst su) ts)
+  apSubst su p = p { propArgs = map (apSubst su) (propArgs p) }
 
 instance ApSubst Props where
   apSubst su (P ps) = P (M.map (apSubst su) ps)
 
 
 -- | Represent a substitution as a set of equations.
+-- We use 'Nothing' in the name, so these equations are goals.
 substToEqns :: Subst -> [Prop]
-substToEqns su = [ Prop Eq [Var x, t] | (x,t) <- su ]
+substToEqns su = [ Prop Nothing Eq [Var x, t] | (x,t) <- su ]
 
 -- | Turn the equations that we have into a substitution, and return
 -- the remaining propositions with the substitution applied to them.
@@ -541,7 +548,7 @@ trivial :: Prop -> Bool
 trivial = solve noProps
 
 solve :: Props -> Prop -> Bool
-solve  _ (Prop Eq [x,y]) | x == y = True
+solve  _ (Prop _ Eq [x,y]) | x == y = True
 solve ps p = solve0 [] p || elemProp p ps
 
 
@@ -577,29 +584,32 @@ Note that we start by first adding all assumptions, and only then we consider
 the goals because the assumptions might help us to solve the goals.
 -------------------------------------------------------------------------------}
 
+-- XXX: Make names for new work!
 addWorkItems :: PropSet -> InertSet -> Maybe InertSet
 addWorkItems ps is =
  case getProp (given ps) of
    Just (g,gs) ->
      do r <- addGiven g is
-        let js = mkInert insertGiven r
+        let js = mkInert (insertGiven g) r
         addWorkItems (unionPropSets (newWork r) ps { given = gs }) js
 
    Nothing ->
      case getProp (wanted ps) of
        Just (w,ws) ->
          do r <- addWanted w is
-            let js = mkInert insertWanted r
+            let js = mkInert (insertWanted w) r
             addWorkItems (unionPropSets (newWork r) ps { wanted = ws }) js
        Nothing -> return is
 
   where
-  addIfAny _ Nothing js     = js
-  addIfAny add (Just i) js  = add i js
-
-  mkInert add r = addIfAny add (whatNext r) $ case newInert r of
-                                                Nothing -> is
-                                                Just js -> js
+  mkInert add r =
+    let as = case dropWanted r of
+               [] -> is
+               ns -> is { wanted = filterProp (keep ns) (wanted is) }
+                  in if consumed r then as else add as
+  keep ns p = case propName p of
+                Nothing -> error "prop without a name"
+                Just x  -> not (x `elem` ns)
 
 
 --------------------------------------------------------------------------------
@@ -608,11 +618,6 @@ addWorkItems ps is =
 
 {- Inetrface with GHC's solver -}
 
-data NumericsResult = NumericsResult
-  { numNewWork :: WorkList
-  , numInert   :: Maybe CanonicalCts   -- Nothing for "no change"
-  , numNext    :: Maybe CanonicalCt
-  }
 
 
 -- We keep the original type in numeric constants to preserve type synonyms.
@@ -620,10 +625,6 @@ toTerm :: Xi -> Term
 toTerm xi = case mplus (isNumberTy xi) (isNumberTy =<< tcView xi) of
               Just n -> Num n (Just xi)
               _      -> Var xi
-
-fromTerm :: Term -> Xi
-fromTerm (Num n mb) = fromMaybe (mkNumberTy n) mb
-fromTerm (Var xi)   = xi
 
 toProp :: CanonicalCt -> Prop
 toProp (CDictCan { cc_class = c, cc_tyargs = xis })
@@ -640,22 +641,104 @@ toProp (CFunEqCan { cc_fun = tc, cc_tyargs = xis, cc_rhs = xi2 })
 toProp p = panic $
   "[TcTypeNats.toProp] Unexpected CanonicalCt: " ++ showSDoc (ppr p)
 
-{- XXX: Todo
+
+toInert :: CanonicalCts -> CanonicalCts -> InertSet
+toInert gs ws = PropSet { given  = listToProps (bagToList gs)
+                        , wanted = listToProps (bagToList ws)
+                        }
+
+
+
+fromTerm :: Term -> Xi
+fromTerm (Num n mb) = fromMaybe (mkNumberTy n) mb
+fromTerm (Var xi)   = xi
+
+
+data CvtProp  = CvtClass Class [Type]
+              | CvtCo Type Type
+
+fromProp :: Prop -> TcS CvtProp
+fromProp (Prop p ts) =
+  case p of
+    Leq -> do cl <- tcsLookupClass lessThanEqualClassName
+              return (CvtClass cl (map fromTerm ts))
+    Eq -> case ts of
+            [t1,t2] -> return $ CvtCo (fromTerm t1) (fromTerm t2)
+            _ -> panic $ "[TcTypeNats.fromProp] Malformed Eq prop"
+
+    Add -> mkFun `fmap` tcsLookupTyCon addTyFamName
+    Mul -> mkFun `fmap` tcsLookupTyCon mulTyFamName
+    Exp -> mkFun `fmap` tcsLookupTyCon expTyFamName
+
+  where mkFun tc = do let ts1 = map fromTerm ts
+                      return $ CvtCo (mkTyConApp tc (init ts1)) (last ts1)
+
+newSubGoal :: CvtProp -> TcS EvVar
+newSubGoal (CvtClass c ts) = newDictVar c ts
+newSubGoal (CvtCo t1 t2)   = newCoVar t1 t2
+
+newFact :: CvtProp -> TcS EvVar
+newFact prop =
+  do d <- newSubGoal prop
+     defineDummy d prop
+     return d
+
+
+-- If we decided that we want to generate evidence terms,
+-- here we would set the evidence properly.  For now, we skip this
+-- step because evidence terms are not used for anything, and they
+-- get quite large, at least, if we start with a small set of axioms.
+defineDummy :: EvVar -> CvtProp -> TcS ()
+defineDummy d (CvtClass c ts) =
+  setDictBind d $ EvAxiom "<=" $ mkTyConApp (classTyCon c) ts
+
+defineDummy c (CvtCo t1 t2) =
+  setCoBind c (mkUnsafeCo t1 t2)
+
+
+data NumericsResult = NumericsResult
+  { numNewWork :: WorkList
+  , numInert   :: Maybe CanonicalCts   -- Nothing for "no change"
+  , numNext    :: Maybe CanonicalCt
+  }
+
+
+toNumericsResult :: CanonicalCt -> Maybe PassResult -> TcS NumericsResult
+toNumericsResult prop Nothing = impossible prop
+toNumericsResult prop (Just res) =
+  return NumericsResult
+    { numNext = if consumed res then Nothing else prop
+    }
+
+
+impossible :: CanonicalCt -> TcS NumericsResult
+impossible c =
+  do numTrace "Impossible" empty
+     let err = mkFrozenError (cc_flavor c) (cc_id c)
+     return NumericsResult
+       { numNext = Just err, numInert = Nothing, numNewWork = emptyWorkList }
+
+
+
+
+-- XXX: What do we do with "derived"?
 canonicalNum :: CanonicalCts -> CanonicalCts -> CanonicalCts -> CanonicalCt ->
                 TcS NumericsResult
-canonicalNum given derived wanted prop =
-  case cc_flavor prop of
-    Wanted {}   -> solveNumWanted given derived wanted prop
-    Derived {}  -> addNumDerived  given derived wanted prop
-    Given {}    -> addNumGiven    given derived wanted prop
+canonicalNum given derived wanted prop0 =
+  let inert = toInert given wanted
+      new   = toProp prop0
+  in case cc_flavor prop of
+       Wanted {}   -> toNumericsResult prop0 $ addWanted inert new
+       Derived {}  -> doNothing
+       Given {}    -> toNumericsResult prop0 $ addGiven inert new
 
-{- Disables the solver.
-  return NumericsResult { numInert    = Nothing
-                        , numNewWork  = emptyWorkList
-                        , numNext     = Just prop
-                        }
--}
--}
+  where
+  -- Disables the solver.
+  doNothing = return NumericsResult { numInert    = Nothing
+                                    , numNewWork  = emptyWorkList
+                                    , numNext     = Just prop0
+                                    }
+
 
 #endif
 
