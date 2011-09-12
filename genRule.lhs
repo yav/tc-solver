@@ -1153,7 +1153,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >
 > -- XXX: Add an appropriate name, reflecting the proof method.
 > eqnToExpr :: Prop -> Doc
-> eqnToExpr (Prop op ts) = parens (text "Prop Nothing" <+> text (opCon op)
+> eqnToExpr (Prop op ts) = parens (text "Prop (error \"gen prop name is missing\")" <+> text (opCon op)
 >                                   <+> smallList (map toExpr ts))
 >
 > bruleToAlt :: BRule -> Doc
@@ -1292,17 +1292,19 @@ Generates code search for assumptions of the appropriate "shape"
 >
 >   step op howMany vars0 = gen howMany initSrc vars0
 >     where
->     initSrc   = parens (text "getPropsFor" <+> con <+> fruleAsmpsName)
+>     initSrc   = parens (text "getPropsForRaw" <+> con <+> fruleAsmpsName)
 >     nextSrc n = text "more" <> con <> int (howMany - n + 1)
 >
->     pats n = listPat $ take ar [ text (fruleVar v) | v <- [ n .. ] ]
+>     pats n = tuplePat [listPat $ take ar [ text (fruleVar v) | v <- [ n .. ] ]
+>                       , wildPat
+>                       ] -- XXX: Use the name of the fact
 >
 >     gen 0 _   vs = (vs, empty)
 >     gen 1 src vs = (vs + ar, pats vs <+> text "<-" <+> src)
 >     gen n src vs = let newSrc = nextSrc n
 >                        (vs1, stmts) = gen (n-1) newSrc (vs+ar)
 >                    in ( vs1
->                       , parens (pats vs <> comma <> newSrc) <+>
+>                       , tuplePat [pats vs, newSrc] <+>
 >                           text "<-" <+> text "choose" <+> src $$ stmts
 >                       )
 >     ar  = arity op

@@ -5,15 +5,13 @@ import Control.Monad(mzero,foldM,guard)
 import Debug.Trace
 import qualified Data.Map as M
 import Data.List(union,find)
-import Data.Maybe(mapMaybe)
+import Data.Maybe(isJust,isNothing)
 
 {-------------------------------------------------------------------------------
 Terms and Propositions
 -------------------------------------------------------------------------------}
 
 type Var  = Xi
-
-type GoalName = String
 
 -- | The 'Xi' in the 'Num' constructor stores the original 'Xi' type that
 -- gave rise to the num.  It is there in an attempt to preserve type synonyms.
@@ -24,10 +22,28 @@ data Term = Var Var
 data Pred = Add | Mul | Exp | Leq | Eq
             deriving (Eq, Ord)
 
-data Prop = Prop { propName :: Maybe GoalName
+-- | For goals (aka wanteds), the "proof" is always "ByAsmp".
+-- The name name of the assmuption indicates where to store
+-- the proof, once we find it.
+data Prop = Prop { propName :: Proof
                  , propPred :: Pred
                  , propArgs :: [Term]
-                 } deriving Eq
+                 }
+
+
+data Proof = AssumedFalse -- XXX: Add proof of False
+           | ByAsmp EvVar
+           | ByRefl                     -- A == A
+           | BySym Proof                -- (A == B) => B = A
+           | ByTrans Proof Proof        -- (A == B, B == C) => A == C
+           | ByCong Pred [Proof] Proof  -- [A_i == B_i, P A_i] => P B_i
+           | ProofLet EvVar Proof Proof
+           | Dummy
+
+goalName :: Prop -> EvVar
+goalName p = case propName p of
+               ByAsmp x -> x
+               _ -> error "[goalName] The goal contains a proof!"
 
 num :: Integer -> Term
 num n = Num n Nothing
@@ -80,7 +96,7 @@ noProps = P M.empty
 
 -- | Add a proposition to an existing set.
 addProp :: Prop -> Props -> Props
-addProp p (P props) = P (M.insertWith union (propPred p) [p] props)
+addProp p (P props) = P (M.insertWith (++) (propPred p) [p] props)
 
 -- | Convert a list of propositions into a set.
 propsFromList :: [Prop] -> Props
@@ -88,7 +104,7 @@ propsFromList = foldr addProp noProps
 
 -- | Combine the propositions from two sets.
 unionProps :: Props -> Props -> Props
-unionProps (P as) (P bs) = P (M.unionWith union as bs)
+unionProps (P as) (P bs) = P (M.unionWith (++) as bs)
 
 -- | Pick one of the propositions from a set,
 -- and return the remaining propositions.
@@ -107,12 +123,12 @@ chooseProp ps =
 
 -- | Get the arguments of propositions constructed with a given
 -- predicate constructor.
-getPropsFor :: Pred -> Props -> [[Term]]
-getPropsFor op (P ps) = map propArgs (M.findWithDefault [] op ps)
+getPropsFor :: Pred -> Props -> [Prop]
+getPropsFor op (P ps) = M.findWithDefault [] op ps
 
--- | Returns 'True' if the proposition belongs to the set.
-elemProp      :: Prop -> Props -> Bool
-elemProp p ps = propArgs p `elem` getPropsFor (propPred p) ps
+getPropsForRaw :: Pred -> Props -> [([Term],Proof)]
+getPropsForRaw p ps = [ (propArgs q, propName q) | q <- getPropsFor p ps ]
+
 
 -- | Returns 'True' if the set is empty.
 isEmpty :: Props -> Bool
@@ -171,7 +187,7 @@ Results of Entailement
 {- | The entailment function may return one of three possible answers,
 informally corresponding to ``certainly not'', ''not in its current form'',
 and ''(a qualified) yes''. -}
-data Answer = NotForAny | NotForAll | YesIf [Prop]
+data Answer = NotForAny | NotForAll | YesIf Props Proof
 
 isNotForAny :: Answer -> Bool
 isNotForAny NotForAny = True
@@ -182,7 +198,7 @@ isNotForAll NotForAll = True
 isNotForAll _         = False
 
 isYesIf :: Answer -> Bool
-isYesIf (YesIf _)     = True
+isYesIf (YesIf _ _)   = True
 isYesIf _             = False
 
 
@@ -276,9 +292,10 @@ element from a collection in all possible ways.  -}
 addGiven  :: Prop -> InertSet -> Maybe PassResult
 addWanted :: Prop -> InertSet -> Maybe PassResult
 
-data PassResult = PassResult { dropWanted :: [GoalName]
-                             , newWork    :: PropSet
-                             , consumed   :: Bool
+data PassResult = PassResult { dropWanted   :: [EvVar]
+                             , solvedWanted :: [(EvVar,Proof)]
+                             , newWork      :: PropSet
+                             , consumed     :: Bool
                              }
 
 
@@ -306,10 +323,11 @@ is already entailed by the currently known assumptions.  Then, we leave
 the inert set unmodified but we record the alternative formulation (if any)
 as new work to be processed by the solver. -}
 
-    YesIf ps -> return PassResult
-      { dropWanted  = []
-      , newWork     = emptyPropSet { given = propsFromList ps }
-      , consumed    = True
+    YesIf ps _ -> return PassResult
+      { dropWanted    = []
+      , solvedWanted  = []
+      , newWork       = emptyPropSet { given = ps }
+      , consumed      = True
       }
 
 {- Finally, if entailment yielded no interaction, then we add the new fact to
@@ -318,9 +336,10 @@ back to the work queue so that we can re-process them in the context of the
 new assumption. -}
 
     NotForAll -> return PassResult
-      { dropWanted  = mapMaybe propName (propsToList (wanted props))
-      , newWork     = props { given = noProps }
-      , consumed    = False
+      { dropWanted    = map goalName (propsToList (wanted props))
+      , solvedWanted  = []
+      , newWork       = props { given = noProps }
+      , consumed      = False
       }
 
 
@@ -347,10 +366,11 @@ of the goal to the work queue. -}
 
     NotForAny -> mzero
 
-    YesIf ps -> return PassResult
-      { dropWanted = []
-      , newWork    = emptyPropSet { wanted = propsFromList ps }
-      , consumed   = True
+    YesIf ps proof -> return PassResult
+      { dropWanted    = []
+      , solvedWanted  = [ (goalName w, proof) ]
+      , newWork       = emptyPropSet { wanted = ps }
+      , consumed      = True
       }
 
 {- The major difference in the algorithm is when there is no interaction
@@ -366,13 +386,14 @@ the presence of the new goal, removing goals that are entailed, and leaving
 goals that result in no interaction in the inert set. -}
 
     NotForAll ->
-      do let start = ([], noProps)
-         (dropped,restart) <- foldM check start (chooseProp (wanted props))
+      do let start = ([],noProps)
+         (solved,new) <- foldM check start (chooseProp (wanted props))
 
          return PassResult
-           { dropWanted = dropped
-           , newWork    = emptyPropSet { wanted = restart }
-           , consumed   = False
+           { dropWanted   = map fst solved
+           , solvedWanted = solved
+           , newWork      = emptyPropSet { wanted = new }
+           , consumed     = False
            }
 
 {- The function \Verb"check" has the details of how to check for interaction
@@ -380,16 +401,13 @@ between some existing goal, \Verb"w1", and the new goal \Verb"w".  The
 set \Verb"ws" has all existing goals without the goal under consideration. -}
 
   where
-  check (dropped, new) (w1,ws) =
+  check (solved, new) (w1,ws) =
     case entails (addProp w (unionProps ws (given props))) w1 of
       NotForAny -> mzero
-      NotForAll -> return (dropped, new)
-      YesIf ps  -> return (propName' w1 : dropped, foldr addProp new ps)
-
-  -- XXX: It would be better to ensure that this does not happen statically.
-  propName' p = case propName p of
-                  Just x  -> x
-                  Nothing -> error "bug: member of inert with no name"
+      NotForAll -> return (solved, new)
+      YesIf ps proof -> return ( (goalName w1, proof) : solved
+                               , unionProps ps new
+                               )
 
 
 {- To see the algorithm in action, consider the following example:
@@ -422,27 +440,49 @@ entails ps p | tr "entails?:" (propsToList ps)
              $ trace ("  " ++ show p) False = undefined
 entails ps' p' =
   case closure ps' of
-    Nothing -> YesIf [] -- Assumed False
+    Nothing -> YesIf noProps Dummy -- Assumed False
     Just (su,ps) ->
-      let p = apSubst su p'
-      in if solve ps p
-            then YesIf []
+      let (p,p_su) = impGoal su p'
+      in case solve ps p of
+           Just proof -> YesIf noProps p_su
+           Nothing ->
 
             -- Try improvement
-            else case closure (addProp p ps) of
-                   Nothing -> NotForAny
-                   Just (su1,_)
+            case closure (addProp p ps) of
+              Nothing -> NotForAny
+              Just (su1,_) ->
+                let su2  = su1  -- XXX: undefined The proofs in 'su1' are in terms of
+                                -- 'p'.  here we should generate fresh goal
+                                -- names, reflecting that these are new things
+                                -- we need to solve, and not proved things
+                                -- (because we have no proof of 'p')
+                    eqns = substToEqns su2
 
-                     -- The extra facts helped
-                     | solve (apSubst su1 ps) (apSubst su1 p)
-                    && not (p' `elem` eqns) -> YesIf eqns
+                    noLuck = if propArgs p == propArgs p'
+                                then NotForAll
+                                else YesIf (addProp p noProps) p_su
 
-                     -- No luck
-                     | p == p'   -> NotForAll
+                in case byAsmp eqns p' of
+                     -- The "improvement" is not actually better, we are
+                     -- just asking for what we had to prove in the first place
+                     Just _ -> noLuck
 
-                     -- Keep going with improved proposition
-                     | otherwise -> YesIf [p]
-                     where eqns = substToEqns su1
+                     Nothing ->
+                        let -- Make some new facts, using existing facts
+                            -- and the new equality assumptions.
+                            ps1 = impAsmps su2 ps
+
+                            -- Make a new (better) goal,
+                            -- using the equality assumptions
+                            -- p_su2:  p <=> p1
+                            (p1,p_su2) = impGoal su2 p
+
+                       in case solve ps1 p1 of
+                            Nothing -> noLuck
+
+                            -- It worked!
+                            Just proof ->
+                              YesIf eqns $ ProofLet (goalName p) p_su2 p_su
 
 closure :: Props -> Maybe (Subst, Props)
 closure ps = closure1 =<< improvingSubst ps
@@ -453,11 +493,11 @@ closure1 (su0, ps0) =
                $ propsFromList
                $ do (q,qs) <- chooseProp ps0
                     i      <- implied qs q
-                    guard (not (solve ps0 i))
+                    guard (isNothing (solve ps0 i))
                     return i
 
      let su1 = compose su su0
-         ps1 = filterProp (not . trivial) (apSubst su ps0)
+         ps1 = filterProp (not . trivial) (impAsmps su ps0)
 
      if isEmpty ps
        then tr "computed closure:" (propsToList ps1)
@@ -489,43 +529,64 @@ enatils_all_prop p ps q =
 -- Substitutions
 -------------------------------------------------------------------------------}
 
-
-type Subst  = [ (Var,Term) ]
+-- The 3rd elemnt of the tuple is a proof that the variable equals the term.
+type Subst  = [ (Var,Term, Proof) ]
 
 
 compose :: Subst -> Subst -> Subst
-compose s2 s1 = [ (x, apSubst s2 t) | (x,t) <- s1 ] ++
-                [ (x,t) | (x,t) <- s2, all (not . eqType x . fst) s1 ]
+compose s2 s1 =
+  [ (x, t2, ByTrans p1 p2) | (x,t,p1) <- s1, let (t2,p2) = apSubst s2 t ] ++
+  [ z | z@(x,_,_) <- s2, all (not . eqType x . fst3) s1 ]
+  where fst3 (x,_,_) = x
 
-mgu :: Term -> Term -> Maybe Subst
-mgu x y | x == y  = return []
-mgu (Var x) t     = return [(x,t)] --- for simple terms no need to occur check
-mgu t (Var x)     = return [(x,t)]
-mgu _ _           = mzero
+-- For simple terms no need to occur check
+mgu :: Proof -> Term -> Term -> Maybe Subst
+mgu _ x y | x == y   = return []
+mgu ev (Var x) t     = return [(x,t,ev)]
+mgu ev t (Var x)     = return [(x,t,ev)]
+mgu _ _ _              = mzero
 
-class ApSubst t where
-  apSubst :: Subst -> t -> t
+-- The proof here is that the two terms are euqal, as long 
+-- as the equations are equalities.  For example,
+-- if the substitutions is { ev: x = 3 }, and we have the term "x"
+-- then we would get the term "3" and 'ev', a proof that "x = 3"
+apSubst :: Subst -> Term -> (Term, Proof)
+apSubst su t@(Var x)
+  | (t1,ev) : _ <- [ (t1,ev) | (y,t1,ev) <- su, eqType x y ] = (t1,ev)
+apSubst _ t           = (t, ByRefl)
 
-instance ApSubst t => ApSubst [t] where
-  apSubst su ts = map (apSubst su) ts
+impGoal :: Subst -> Prop -> (Prop, Proof)
+impGoal su p
+  | null su || propArgs p == ts  = (p, propName p)
+  | otherwise = ( p { propArgs = ts
+                    , propName = ByAsmp newName
+                    }
+                , ByCong (propPred p) (map BySym evs) (ByAsmp newName)
+                )
+  where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
+        newName  = undefined
 
-instance ApSubst Term where
-  apSubst su t@(Var x)  = case find (eqType x . fst) su of
-                            Just (_,t1) -> t1
-                            _ -> t
-  apSubst _ t           = t
+-- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
+impAsmp :: Subst -> Prop -> Prop
+impAsmp su p = p { propName = ByCong (propPred p) evs (propName p)
+                 , propArgs = ts
+                 }
+  where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
 
-instance ApSubst Prop where
-  apSubst su p = p { propArgs = map (apSubst su) (propArgs p) }
 
-instance ApSubst Props where
-  apSubst su (P ps) = P (M.map (apSubst su) ps)
+impAsmps :: Subst -> Props -> Props
+impAsmps su (P ps) = P (M.map (map (impAsmp su)) ps)
+
+
 
 
 -- | Represent a substitution as a set of equations.
--- We use 'Nothing' in the name, so these equations are goals.
-substToEqns :: Subst -> [Prop]
-substToEqns su = [ Prop Nothing Eq [Var x, t] | (x,t) <- su ]
+substToEqns :: Subst -> Props
+substToEqns su = propsFromList [ Prop ev Eq [Var x, t] | (x,t,ev) <- su ]
+
+-- x = 2, x + y = 3
+
+-- x = 2 => 2 + y = 3
 
 -- | Turn the equations that we have into a substitution, and return
 -- the remaining propositions with the substitution applied to them.
@@ -534,23 +595,29 @@ substToEqns su = [ Prop Nothing Eq [Var x, t] | (x,t) <- su ]
 improvingSubst :: Props -> Maybe (Subst, Props)
 improvingSubst ps  = do su <- loop [] (getPropsFor Eq ps)
                         return (su, filterProp (not . trivial)
-                                   $ apSubst su $ rmPropsFor Eq ps)
+                                   $ impAsmps su $ rmPropsFor Eq ps)
   where
-  loop su ([x,y] : eqs) =
-    do su1 <- mgu x y
-       loop (compose su1 su) (apSubst su1 eqs)
-  loop _ (_ : _) = error "bug: improveSubst eqn of arity not 2"
+  loop su (eq : eqs) =
+    do let [x,y] = propArgs eq
+       su1 <- mgu (propName eq) x y
+       loop (compose su1 su) (map (impAsmp su1) eqs)
   loop su [] = return su
 
 
 
 trivial :: Prop -> Bool
-trivial = solve noProps
+trivial = isJust . solve noProps
 
-solve :: Props -> Prop -> Bool
-solve  _ (Prop _ Eq [x,y]) | x == y = True
-solve ps p = solve0 [] p || elemProp p ps
+solve :: Props -> Prop -> Maybe Proof
+solve  _ (Prop _ Eq [x,y]) | x == y = Just ByRefl
+solve ps p
+  | solve0 [] p   = return Dummy
+  | otherwise     = byAsmp ps p
 
+byAsmp :: Props -> Prop -> Maybe Proof
+byAsmp ps p =
+  do q <- find (\x -> propArgs x == propArgs p) $ getPropsFor (propPred p) ps
+     return $ propName q
 
 
 
@@ -561,7 +628,17 @@ Testing without GHC
 #define TEST_WITHOUT_GHC 1
 #ifdef TEST_WITHOUT_GHC
 
-type Xi   = String
+type Xi       = String
+type EvVar = String
+
+newtype TcS a = T (Int -> (a,Int))
+
+instance Monad TcS where
+  return x  = T (\s -> (x,s))
+  T m >>= f = T (\s -> let (a,s1) = m s
+                           T m1   = f a
+                       in m1 $! s1)
+
 
 eqType :: Xi -> Xi -> Bool
 eqType = (==)
@@ -584,7 +661,6 @@ Note that we start by first adding all assumptions, and only then we consider
 the goals because the assumptions might help us to solve the goals.
 -------------------------------------------------------------------------------}
 
--- XXX: Make names for new work!
 addWorkItems :: PropSet -> InertSet -> Maybe InertSet
 addWorkItems ps is =
  case getProp (given ps) of
@@ -607,9 +683,7 @@ addWorkItems ps is =
                [] -> is
                ns -> is { wanted = filterProp (keep ns) (wanted is) }
                   in if consumed r then as else add as
-  keep ns p = case propName p of
-                Nothing -> error "prop without a name"
-                Just x  -> not (x `elem` ns)
+  keep ns p = not (goalName p `elem` ns)
 
 
 --------------------------------------------------------------------------------
@@ -617,8 +691,6 @@ addWorkItems ps is =
 --------------------------------------------------------------------------------
 
 {- Inetrface with GHC's solver -}
-
-
 
 -- We keep the original type in numeric constants to preserve type synonyms.
 toTerm :: Xi -> Term
