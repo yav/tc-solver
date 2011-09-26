@@ -13,6 +13,7 @@ import Data.Maybe(fromMaybe)
 import System.Process
 import System.Exit(ExitCode(..))
 import Text.ParserCombinators.ReadP
+import Debug.Trace
 
 import TcTypeNats
 
@@ -56,9 +57,8 @@ onConnect s (h,host,p) =
 
 
 --------------------------------------------------------------------------------
-data Cmd = AddC Int [WorkItem] | RmC Int
-type WorkItem = (PropKind,Prop)
-data PropKind = Given | Wanted deriving Show
+data Cmd = AddC Int [WorkItem] | RmC Int deriving Show
+data WorkItem = Given Fact | Wanted Goal deriving Show
 
 data S = S { entered  :: M.Map Int [WorkItem]
            , inertSet :: Maybe PropSet
@@ -68,21 +68,21 @@ initS :: S
 initS = S { entered = M.empty, inertSet = Just emptyPropSet }
 
 
-addWorkItemsUI :: [WorkItem] -> PropSet -> Maybe PropSet
-addWorkItemsUI ws is = addWorkItems set is
-  where set = PropSet { wanted = propsFromList [ w | (Wanted,w) <- ws ]
-                      , given  = propsFromList [ g | (Given,g) <- ws ]
+addWorkItemsUI :: (Int,[WorkItem]) -> InertSet -> Maybe InertSet
+addWorkItemsUI (n,ws) is = addWorkItems set is ('w' : show n) (length ws + 1)
+  where set = PropSet { wanted = setFromList [ w | Wanted w <- ws ]
+                      , given  = setFromList [ g | Given g  <- ws ]
                       }
 
 processCmd :: Cmd -> S -> S
 processCmd cmd s =
   case cmd of
     AddC x wi -> S { entered   = M.insert x wi (entered s)
-                   , inertSet  = addWorkItemsUI wi =<< inertSet s
+                   , inertSet  = addWorkItemsUI (x,wi) =<< inertSet s
                    }
     RmC x     -> S { entered   = ents
-                   , inertSet  = addWorkItemsUI (concat $ M.elems ents)
-                                                                  emptyPropSet
+                   , inertSet  = foldM (flip addWorkItemsUI) emptyPropSet
+                                                      (M.toList ents)
                    }
       where ents = M.delete x (entered s)
 
@@ -155,9 +155,14 @@ parse url =
 parseWI :: Int -> String -> Maybe [WorkItem]
 parseWI n txt =
   case break (== '&') txt of
-    ("Wanted", _:p) -> map ((,) Wanted) `fmap` parseProp n p
-    ("Given", _:p)  -> map ((,) Given)  `fmap` parseProp n p
+    ("Wanted", _:p) -> zipWith mkGoal [ 1 .. ] `fmap` parseProp n p
+    ("Given", _:p)  -> zipWith mkFact [ 1 .. ] `fmap` parseProp n p
     _               -> Nothing
+  where
+  mkGoal x p = Wanted Goal { goalName = mkName "w" x, goalProp = p }
+  mkFact x p = Given Fact { factProof = ByAsmp (mkName "g" x), factProp = p }
+  mkName p x  = p ++ show n ++ "_" ++ show x
+
 
 parseProp :: Int -> String -> Maybe [Prop]
 parseProp n txt =
@@ -170,14 +175,15 @@ parseProp n txt =
   dec (x : xs)           = (x:) `fmap` dec xs
 
 renderWI :: WorkItem -> String
-renderWI (x,y) = list [ show (show x), show (show y) ]
+renderWI (Wanted w) = list [ show "Wanted", show (show (goalProp w)) ]
+renderWI (Given  f) = list [ show "Given",  show (show (factProp f)) ]
 
 renderIS :: Maybe PropSet -> String
 renderIS Nothing = "[ [\"Wanted\",\"(inconsistent)\"]," ++
                      "[\"Given\", \"(inconsistent)\"] ]"
 renderIS (Just xs) =
-  list ( [ renderWI (Given,g) | g <- propsToList (given xs) ] ++
-         [ renderWI (Wanted,w) | w <- propsToList (wanted xs) ])
+  list ( [ renderWI (Given g)  | g <- setToList (given xs) ] ++
+         [ renderWI (Wanted w) | w <- setToList (wanted xs) ])
 
 list xs = "[" ++ concat (intersperse "," xs) ++ "]"
 
@@ -187,11 +193,11 @@ pEqn n =
     [ do (t1,op,t2,n',es1) <- pTerm pref 0
          tchar '='
          (t3,_,es2) <- pAtom pref n'
-         return (Prop undefined op [t1,t2,t3] : es1 ++ es2) -- XXX: Maybe make up names
+         return (Prop op [t1,t2,t3] : es1 ++ es2)
     , do (t1,n1,es1) <- pAtom pref 0
          r <- pRel
          (t2,_,es2) <- pAtom pref n1
-         return (Prop undefined r [t1,t2] : es1 ++ es2) -- XXX: Maybe make up names
+         return (Prop r [t1,t2] : es1 ++ es2)
     ]
   where pref = n
 
@@ -213,7 +219,7 @@ pAtom pref n =
             return (Var (a:as), n, [])
        , do (t1,op,t2,n',es) <- between (tchar '(') (tchar ')') (pTerm pref n)
             let x = Var (newVar pref n')
-            return (x, n'+1, Prop undefined op [t1,t2,x] : es) -- XXX: Name?
+            return (x, n'+1, Prop op [t1,t2,x] : es)
        ]
 
 pRel :: ReadP Pred

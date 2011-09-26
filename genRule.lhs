@@ -1129,8 +1129,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > termToPat t                       = parens (numPat (text (show t)))
 >
 > eqnToPat :: Prop -> Pat
-> eqnToPat (Prop op ts) = conPat "Prop" [ wildPat
->                                       , conPat (opCon op) []
+> eqnToPat (Prop op ts) = conPat "Prop" [ conPat (opCon op) []
 >                                       , listPat (map termToPat ts)
 >                                       ]
 > opCon :: Op -> String
@@ -1151,10 +1150,12 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >     Var x | not (numV x) -> text (show x)
 >     _ -> parens (text "num" <+> text (show t))
 >
-> -- XXX: Add an appropriate name, reflecting the proof method.
+> -- XXX: Add the proof!
 > eqnToExpr :: Prop -> Doc
-> eqnToExpr (Prop op ts) = parens (text "Prop (error \"gen prop name is missing\")" <+> text (opCon op)
->                                   <+> smallList (map toExpr ts))
+> eqnToExpr (Prop op ts) =
+>     text "Fact { factProof = Dummy" <> comma <+>
+>     text "factProp = Prop" <+> text (opCon op)
+>                                <+> smallList (map toExpr ts) <+> text "}"
 >
 > bruleToAlt :: BRule -> Doc
 > bruleToAlt r = text "{-" <+> bNotes r <+> text "-}"
@@ -1236,8 +1237,8 @@ frule_Add_2_1_0_0_0 t1 t2 t3 =
 
 > codeFRules :: M.Map Op (M.Map [(Op,Int)] [FRule]) -> Doc
 > codeFRules m =
->   text "implied :: Props -> Prop -> [Prop]" $$
->   text "implied" <+> fruleAsmpsName <+> text "newProp = case newProp of" $$
+>   text "implied :: Set Fact -> Fact -> [Fact]" $$
+>   text "implied" <+> fruleAsmpsName <+> text "newProp = case factProp newProp of" $$
 >   nest 2 (vcat (map cases (M.toList m)) $$ text "_ -> []")
 >   where
 >   cases (op,m1) =
