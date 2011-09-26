@@ -14,6 +14,8 @@ import System.Process
 import System.Exit(ExitCode(..))
 import Text.ParserCombinators.ReadP
 import Debug.Trace
+import System.Info
+
 
 import TcTypeNats
 
@@ -26,11 +28,18 @@ info = putStrLn
 
 --------------------------------------------------------------------------------
 
+start :: String
+start | "mingw" `isInfixOf` os = "start"
+      | "inux" `isInfixOf` os = "gnome-open"
+      | otherwise             = "open"
+
+
+
 main :: IO ()
 main = withSocketsDo
      $ do s <- listenOn (PortNumber port)
           info $ "Listening on port " ++ show port
-          ExitSuccess <- system "gnome-open UI.html"
+          ExitSuccess <- system (start ++ " UI.html")
           loop s initS `finally` sClose s
   where loop s st = loop s =<< onConnect st =<< accept s
 
@@ -251,5 +260,6 @@ readMb'    :: ReadS a -> String -> Maybe a
 readMb' f x = case f x of
                 [(a,"")] -> Just a
                 _ -> Nothing
+
 
 
