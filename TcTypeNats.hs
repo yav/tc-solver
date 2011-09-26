@@ -14,7 +14,7 @@ Terms and Propositions
 type Var  = Xi
 
 -- | The 'Xi' in the 'Num' constructor stores the original 'Xi' type that
--- gave rise to the num.  It is there in an attempt to preserve type synonyms.
+-- gave rise to the number. It is there in an attempt to preserve type synonyms.
 data Term = Var Var
           | Num Integer (Maybe Xi)
             deriving (Eq,Ord)
@@ -22,9 +22,6 @@ data Term = Var Var
 data Pred = Add | Mul | Exp | Leq | Eq
             deriving (Eq, Ord)
 
--- | For goals (aka wanteds), the "proof" is always "ByAsmp".
--- The name name of the assmuption indicates where to store
--- the proof, once we find it.
 data Prop = Prop Pred [Term]
 data Goal = Goal { goalName  :: EvVar, goalProp :: Prop }
 data Fact = Fact { factProof :: Proof, factProp :: Prop }
@@ -90,10 +87,10 @@ instance Show Prop where
   show (Prop op ts) = show op ++ " " ++ unwords (map show ts)
 
 instance Show Fact where
-  show f = "G: " ++ show (getProp f)
+  show f = "G: " ++ show (factProp f)
 
 instance Show Goal where
-  show f = "W: " ++ show (getProp f)
+  show f = "W: " ++ show (goalProp f)
 
 {-------------------------------------------------------------------------------
 Collections of Entities with Propositions
@@ -556,11 +553,11 @@ closure1 (su0, ps0) =
                $ setFromList
                $ do (q,qs) <- chooseProp ps0
                     i      <- implied qs q
-                    guard (isNothing (solve ps0 (getProp i)))
+                    guard (isNothing (solve ps0 (factProp i)))
                     return i
 
      let su1 = compose su su0
-         ps1 = filterProp (not . trivial . getProp) (impAsmps su ps0)
+         ps1 = filterProp (not . trivial . factProp) (impAsmps su ps0)
 
      if isEmptySet ps
        then tr "computed closure:" (setToList ps1)
@@ -662,7 +659,7 @@ substToEqns su = setFromList (map mk su)
 -- substitutions in the 'Set' type.
 improvingSubst :: Set Fact -> Maybe (Subst, Set Fact)
 improvingSubst ps  = do su <- loop [] (getPropsFor Eq ps)
-                        return (su, filterProp (not . trivial . getProp)
+                        return (su, filterProp (not . trivial . factProp)
                                    $ impAsmps su $ rmSetFor Eq ps)
   where
   loop su (eq : eqs) =
