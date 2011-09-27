@@ -76,7 +76,7 @@ Rule constructors
 >   where ru = Rule { rAsmps  = as
 >                   , rSides  = []
 >                   , rConc   = r
->                   , rName   = RuleBasic name
+>                   , rName   = RuleBasic name (map Var (fvs (as,r)))
 >                   }
 >
 > rule :: String -> Prop -> Rule
@@ -87,8 +87,7 @@ Rule constructors
 >
 
 
-> data RuleName = RuleBasic String
->               | RuleInst Subst RuleName
+> data RuleName = RuleBasic String [Term]
 >               | RuleCut RuleName Integer RuleName
 >               | EqSym RuleName
 >               | EqTrans RuleName RuleName
@@ -96,8 +95,12 @@ Rule constructors
 >
 > -- A smart constructor to avoid successive instantiations.
 > ruleInstName :: Subst -> RuleName -> RuleName
-> ruleInstName su2 (RuleInst su1 r) = RuleInst (compose su2 su1) r
-> ruleInstName su r                 = RuleInst su r
+> ruleInstName su (RuleBasic x ts)  = RuleBasic x (map (apSubst su) ts)
+> ruleInstName su (EqSym r)         = EqSym (ruleInstName su r)
+> ruleInstName su (EqTrans r1 r2)   = EqTrans (ruleInstName su r1)
+>                                             (ruleInstName su r2)
+> ruleInstName su (RuleCut r1 n r2) = RuleCut (ruleInstName su r1) n
+>                                             (ruleInstName su r2)
 >
 > trivialRule :: Rule -> Bool
 > trivialRule r = all numV (fvs (rConc r))    -- axiom
@@ -605,10 +608,9 @@ Showing
 > ppRuleName :: RuleName -> Doc
 > ppRuleName r0 =
 >   case r0 of
->     RuleBasic x  -> text x
->     RuleInst s r -> (text "inst. with" <+> hsep (punctuate comma $ map ppS s))
->                  $$ nest 2 (ppRuleName r)
->       where ppS (x,t) = text (show x) <+> text "=" <+> text (show t)
+>     RuleBasic x [] -> text x
+>     RuleBasic x ts -> text x <> char '@' <>
+>                         parens (hsep $ punctuate comma $ map (text . show) ts)
 >     RuleCut r1 n r2 -> text "let argument" <+> integer n <+> text "of"
 >                          $$ nest 3 (ppRuleName r1)
 >                          $$ text "be" <+> ppRuleName r2
