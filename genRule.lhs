@@ -1103,7 +1103,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > listPat ps = brackets $ fsep $ punctuate comma ps
 
 > smallList :: [Doc] -> Doc
-> smallList ds = brackets $ fsep $ punctuate comma ds
+> smallList ds = brackets $ hsep $ punctuate comma ds
 
 > bigList :: [Doc] -> Doc
 > bigList [] = text "[]"
@@ -1285,27 +1285,28 @@ Generates code search for assumptions of the appropriate "shape"
 (i.e., just based on the predicate, not the predicate's arguments.)
 
 > codeMatchProps :: Int -> Props -> Doc
-> codeMatchProps ar0 m = vcat $ snd $ mapAccumL doOp ar0 fruleOrder
+> codeMatchProps ar0 m = vcat $ snd $ mapAccumL doOp (ar0,1) fruleOrder
 >   where
->   doOp vs op = case M.lookup op m of
->                  Nothing -> (vs, empty)
->                  Just ts -> step op (length ts) vs
+>   doOp s op = case M.lookup op m of
+>                 Nothing -> (s, empty)
+>                 Just ts -> step op (length ts) s
 >
->   step op howMany vars0 = gen howMany initSrc vars0
+>   step op howMany s0 = gen howMany initSrc s0
 >     where
 >     initSrc   = parens (text "getPropsForRaw" <+> con <+> fruleAsmpsName)
 >     nextSrc n = text "more" <> con <> int (howMany - n + 1)
 >
->     pats n = tuplePat [listPat $ take ar [ text (fruleVar v) | v <- [ n .. ] ]
->                       , wildPat
->                       ] -- XXX: Use the name of the fact
+>     pats (n,pn) = tuplePat
+>                     [ listPat $ take ar [ text (fruleVar v) | v <- [ n .. ] ]
+>                     , text "proof" <> int pn
+>                     ]
 >
->     gen 0 _   vs = (vs, empty)
->     gen 1 src vs = (vs + ar, pats vs <+> text "<-" <+> src)
->     gen n src vs = let newSrc = nextSrc n
->                        (vs1, stmts) = gen (n-1) newSrc (vs+ar)
+>     gen 0 _  s          = (s, empty)
+>     gen 1 src s@(vs,ps) = ((vs + ar, ps + 1), pats s <+> text "<-" <+> src)
+>     gen n src s@(vs,ps) = let newSrc = nextSrc n
+>                               (vs1, stmts) = gen (n-1) newSrc (vs+ar,ps+1)
 >                    in ( vs1
->                       , tuplePat [pats vs, newSrc] <+>
+>                       , tuplePat [pats s, newSrc] <+>
 >                           text "<-" <+> text "choose" <+> src $$ stmts
 >                       )
 >     ar  = arity op
