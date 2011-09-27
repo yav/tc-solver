@@ -1150,7 +1150,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > -- XXX: Add the proof!
 > eqnToExpr :: Prop -> Doc
 > eqnToExpr (Prop op ts) =
->     text "Fact { factProof = Dummy" <> comma <+>
+>     text "Fact { factProof = bySorry " <> comma <+>
 >     text "factProp = Prop" <+> text (opCon op)
 >                                <+> smallList (map toExpr ts) <+> text "}"
 >

@@ -47,14 +47,36 @@ propArgs :: HasProp a => a -> [Term]
 propArgs p = case getProp p of
                Prop _ xs -> xs
 
-data Proof = AssumedFalse -- XXX: Add proof of False
-           | ByAsmp EvVar
-           | ByRefl Term                -- A == A
-           | BySym Proof                -- (A == B) => B = A
-           | ByTrans Proof Proof        -- (A == B, B == C) => A == C
-           | ByCong Pred [Proof] Proof  -- [A_i == B_i, P A_i] => P B_i
+
+data Theorem  = AssumedFalse
+              | EqRefl
+              | EqSym
+              | EqTrans
+              | Cong Pred
+              | Sorry
+
+data Proof = ByAsmp EvVar
+           | Using Theorem [Term] [Proof]   -- instantiation, sub-proof
            | ProofLet EvVar Proof Proof
-           | Dummy
+
+byRefl :: Term -> Proof
+byRefl t = Using EqRefl [t] []
+
+bySym :: Proof -> Proof
+bySym p = Using EqSym [] [p]
+
+byTrans :: Proof -> Proof -> Proof
+byTrans p1 p2 = Using EqTrans [] [p1,p2]
+
+byCong :: Pred -> [Proof] -> Proof -> Proof
+byCong p qs q = Using (Cong p) [] (qs ++ [q])
+
+bySorry :: Proof
+bySorry = Using Sorry [] []
+
+byFalse :: Proof
+byFalse = Using AssumedFalse [] []
+
 
 -- | This is used when we want to try to solve a new goal, in terms
 -- of already existing goals.
@@ -493,7 +515,7 @@ entails ps p | tr "entails?:" (setToList ps)
              $ trace ("  " ++ show p) False = undefined
 entails ps' p' =
   case closure ps' of
-    Nothing -> return (YesIf emptySet Dummy) -- Assumed False
+    Nothing -> return (YesIf emptySet byFalse) -- Assumed False. XXX: Could record proof
     Just (su,ps) ->
       do (p,p_su) <- impGoal su p'
          case solve ps (goalProp p) of
@@ -597,7 +619,7 @@ type Subst  = [ (Var,Term, Proof) ]
 
 compose :: Subst -> Subst -> Subst
 compose s2 s1 =
-  [ (x, t2, ByTrans p1 p2) | (x,t,p1) <- s1, let (t2,p2) = apSubst s2 t ] ++
+  [ (x, t2, byTrans p1 p2) | (x,t,p1) <- s1, let (t2,p2) = apSubst s2 t ] ++
   [ z | z@(x,_,_) <- s2, all (not . eqType x . fst3) s1 ]
   where fst3 (x,_,_) = x
 
@@ -615,7 +637,7 @@ mgu _ _ _              = mzero
 apSubst :: Subst -> Term -> (Term, Proof)
 apSubst su t@(Var x)
   | (t1,ev) : _ <- [ (t1,ev) | (y,t1,ev) <- su, eqType x y ] = (t1,ev)
-apSubst _ t           = (t, ByRefl t)
+apSubst _ t           = (t, byRefl t)
 
 -- Given a goal, return a potentially new goal, and a proof which
 -- would solve the old goal in terms of the new one.
@@ -623,13 +645,13 @@ impGoal :: Subst -> Goal -> TCN (Goal, Proof)
 impGoal su p
   | null su || propArgs p == ts  = return (p, ByAsmp (goalName p))
   | otherwise = do g <- newGoal (Prop (propPred p) ts)
-                   return (g, ByCong (propPred p) (map BySym evs)
+                   return (g, byCong (propPred p) (map bySym evs)
                                                   (ByAsmp (goalName g)))
   where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
 
 -- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
 impAsmp :: Subst -> Fact -> Fact
-impAsmp su p = p { factProof = ByCong (propPred p) evs (factProof p)
+impAsmp su p = p { factProof = byCong (propPred p) evs (factProof p)
                  , factProp  = Prop (propPred p) ts
                  }
   where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
@@ -674,9 +696,9 @@ trivial :: Prop -> Bool
 trivial = isJust . solve emptySet
 
 solve :: Set Fact -> Prop -> Maybe Proof
-solve  _ (Prop Eq [x,y]) | x == y = Just (ByRefl x)
+solve  _ (Prop Eq [x,y]) | x == y = Just (byRefl x)
 solve ps p
-  | solve0 [] p   = return Dummy
+  | solve0 [] p   = return bySorry
   | otherwise     = byAsmp ps p
 
 byAsmp :: Set Fact -> Prop -> Maybe Proof
