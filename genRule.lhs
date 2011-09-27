@@ -76,7 +76,7 @@ Rule constructors
 >   where ru = Rule { rAsmps  = as
 >                   , rSides  = []
 >                   , rConc   = r
->                   , rName   = RuleBasic name
+>                   , rName   = RuleBasic name (map Var (fvs (as,r)))
 >                   }
 >
 > rule :: String -> Prop -> Rule
@@ -87,17 +87,17 @@ Rule constructors
 >
 
 
-> data RuleName = RuleBasic String
->               | RuleInst Subst RuleName
+> data RuleName = RuleBasic String [Term]
 >               | RuleCut RuleName Integer RuleName
 >               | EqSym RuleName
->               | EqTrans RuleName RuleName
 >                 deriving Eq
 >
 > -- A smart constructor to avoid successive instantiations.
 > ruleInstName :: Subst -> RuleName -> RuleName
-> ruleInstName su2 (RuleInst su1 r) = RuleInst (compose su2 su1) r
-> ruleInstName su r                 = RuleInst su r
+> ruleInstName su (RuleBasic x ts)  = RuleBasic x (map (apSubst su) ts)
+> ruleInstName su (EqSym r)         = EqSym (ruleInstName su r)
+> ruleInstName su (RuleCut r1 n r2) = RuleCut (ruleInstName su r1) n
+>                                             (ruleInstName su r2)
 >
 > trivialRule :: Rule -> Bool
 > trivialRule r = all numV (fvs (rConc r))    -- axiom
@@ -605,16 +605,13 @@ Showing
 > ppRuleName :: RuleName -> Doc
 > ppRuleName r0 =
 >   case r0 of
->     RuleBasic x  -> text x
->     RuleInst s r -> (text "inst. with" <+> hsep (punctuate comma $ map ppS s))
->                  $$ nest 2 (ppRuleName r)
->       where ppS (x,t) = text (show x) <+> text "=" <+> text (show t)
+>     RuleBasic x [] -> text x
+>     RuleBasic x ts -> text x <> char '@' <>
+>                         parens (hsep $ punctuate comma $ map (text . show) ts)
 >     RuleCut r1 n r2 -> text "let argument" <+> integer n <+> text "of"
 >                          $$ nest 3 (ppRuleName r1)
 >                          $$ text "be" <+> ppRuleName r2
 >     EqSym r         -> text "eq-sym" $$ nest 2 (ppRuleName r)
->     EqTrans r1 r2   -> text "eq-trans" $$ nest 2 (ppRuleName r1)
->                                        $$ nest 2 (ppRuleName r2)
 
 
 > instance Show Var where
@@ -1103,7 +1100,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > listPat ps = brackets $ fsep $ punctuate comma ps
 
 > smallList :: [Doc] -> Doc
-> smallList ds = brackets $ fsep $ punctuate comma ds
+> smallList ds = brackets $ hsep $ punctuate comma ds
 
 > bigList :: [Doc] -> Doc
 > bigList [] = text "[]"
@@ -1285,27 +1282,28 @@ Generates code search for assumptions of the appropriate "shape"
 (i.e., just based on the predicate, not the predicate's arguments.)
 
 > codeMatchProps :: Int -> Props -> Doc
-> codeMatchProps ar0 m = vcat $ snd $ mapAccumL doOp ar0 fruleOrder
+> codeMatchProps ar0 m = vcat $ snd $ mapAccumL doOp (ar0,1) fruleOrder
 >   where
->   doOp vs op = case M.lookup op m of
->                  Nothing -> (vs, empty)
->                  Just ts -> step op (length ts) vs
+>   doOp s op = case M.lookup op m of
+>                 Nothing -> (s, empty)
+>                 Just ts -> step op (length ts) s
 >
->   step op howMany vars0 = gen howMany initSrc vars0
+>   step op howMany s0 = gen howMany initSrc s0
 >     where
 >     initSrc   = parens (text "getPropsForRaw" <+> con <+> fruleAsmpsName)
 >     nextSrc n = text "more" <> con <> int (howMany - n + 1)
 >
->     pats n = tuplePat [listPat $ take ar [ text (fruleVar v) | v <- [ n .. ] ]
->                       , wildPat
->                       ] -- XXX: Use the name of the fact
+>     pats (n,pn) = tuplePat
+>                     [ listPat $ take ar [ text (fruleVar v) | v <- [ n .. ] ]
+>                     , text "proof" <> int pn
+>                     ]
 >
->     gen 0 _   vs = (vs, empty)
->     gen 1 src vs = (vs + ar, pats vs <+> text "<-" <+> src)
->     gen n src vs = let newSrc = nextSrc n
->                        (vs1, stmts) = gen (n-1) newSrc (vs+ar)
+>     gen 0 _  s          = (s, empty)
+>     gen 1 src s@(vs,ps) = ((vs + ar, ps + 1), pats s <+> text "<-" <+> src)
+>     gen n src s@(vs,ps) = let newSrc = nextSrc n
+>                               (vs1, stmts) = gen (n-1) newSrc (vs+ar,ps+1)
 >                    in ( vs1
->                       , tuplePat [pats vs, newSrc] <+>
+>                       , tuplePat [pats s, newSrc] <+>
 >                           text "<-" <+> text "choose" <+> src $$ stmts
 >                       )
 >     ar  = arity op
