@@ -697,9 +697,7 @@ trivial = isJust . solve emptySet
 
 solve :: Set Fact -> Prop -> Maybe Proof
 solve  _ (Prop Eq [x,y]) | x == y = Just (byRefl x)
-solve ps p
-  | solve0 [] p   = return bySorry
-  | otherwise     = byAsmp ps p
+solve ps p = solve0 [] p `mplus` byAsmp ps p
 
 byAsmp :: Set Fact -> Prop -> Maybe Proof
 byAsmp ps p =

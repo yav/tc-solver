@@ -1158,15 +1158,15 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > bruleToAlt r = text "{-" <+> bNotes r <+> text "-}"
 >               $$ eqnsToPat (bNew r : bPats r)
 >               $$ nest 2 (ppGuards (bBoringGs r) (bGuards r)
->               $$ text "->" <+> text "True")
+>               $$ text "->" <+> text "Just bySorry")
 >
 > solveFun :: (Int, [BRule]) -> Doc
 > solveFun (_,[]) = error "bug: solveFun []"
 > solveFun (n, bs) =
->     text "solve" <> int n <+> text ":: [Prop] -> Prop -> Bool" $$
+>     text "solve" <> int n <+> text ":: [Fact] -> Prop -> Maybe Proof" $$
 >     text "solve" <> int n <+> text "asmps" <+> text "goal" <+> text "=" $$
->   nest 2 (text "case goal : asmps of"
->           $$ nest 2 (vsep (map bruleToAlt bs) $$ text "_ -> False"))
+>   nest 2 (text "case goal : map factProp asmps of"
+>           $$ nest 2 (vsep (map bruleToAlt bs) $$ text "_ -> Nothing"))
 
 
 
