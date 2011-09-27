@@ -90,15 +90,12 @@ Rule constructors
 > data RuleName = RuleBasic String [Term]
 >               | RuleCut RuleName Integer RuleName
 >               | EqSym RuleName
->               | EqTrans RuleName RuleName
 >                 deriving Eq
 >
 > -- A smart constructor to avoid successive instantiations.
 > ruleInstName :: Subst -> RuleName -> RuleName
 > ruleInstName su (RuleBasic x ts)  = RuleBasic x (map (apSubst su) ts)
 > ruleInstName su (EqSym r)         = EqSym (ruleInstName su r)
-> ruleInstName su (EqTrans r1 r2)   = EqTrans (ruleInstName su r1)
->                                             (ruleInstName su r2)
 > ruleInstName su (RuleCut r1 n r2) = RuleCut (ruleInstName su r1) n
 >                                             (ruleInstName su r2)
 >
@@ -615,8 +612,6 @@ Showing
 >                          $$ nest 3 (ppRuleName r1)
 >                          $$ text "be" <+> ppRuleName r2
 >     EqSym r         -> text "eq-sym" $$ nest 2 (ppRuleName r)
->     EqTrans r1 r2   -> text "eq-trans" $$ nest 2 (ppRuleName r1)
->                                        $$ nest 2 (ppRuleName r2)
 
 
 > instance Show Var where
