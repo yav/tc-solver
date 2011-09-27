@@ -49,7 +49,7 @@ propArgs p = case getProp p of
 
 data Proof = AssumedFalse -- XXX: Add proof of False
            | ByAsmp EvVar
-           | ByRefl                     -- A == A
+           | ByRefl Term                -- A == A
            | BySym Proof                -- (A == B) => B = A
            | ByTrans Proof Proof        -- (A == B, B == C) => A == C
            | ByCong Pred [Proof] Proof  -- [A_i == B_i, P A_i] => P B_i
@@ -615,7 +615,7 @@ mgu _ _ _              = mzero
 apSubst :: Subst -> Term -> (Term, Proof)
 apSubst su t@(Var x)
   | (t1,ev) : _ <- [ (t1,ev) | (y,t1,ev) <- su, eqType x y ] = (t1,ev)
-apSubst _ t           = (t, ByRefl)
+apSubst _ t           = (t, ByRefl t)
 
 -- Given a goal, return a potentially new goal, and a proof which
 -- would solve the old goal in terms of the new one.
@@ -674,7 +674,7 @@ trivial :: Prop -> Bool
 trivial = isJust . solve emptySet
 
 solve :: Set Fact -> Prop -> Maybe Proof
-solve  _ (Prop Eq [x,y]) | x == y = Just ByRefl
+solve  _ (Prop Eq [x,y]) | x == y = Just (ByRefl x)
 solve ps p
   | solve0 [] p   = return Dummy
   | otherwise     = byAsmp ps p
