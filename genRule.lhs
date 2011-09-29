@@ -88,7 +88,7 @@ Rule constructors
 
 
 > data RuleName = RuleBasic String [Term]
->               | RuleCut RuleName Integer RuleName
+>               | RuleCut RuleName [ (Integer,RuleName) ] -- sorted by num
 >               | EqSym RuleName
 >                 deriving Eq
 >
@@ -96,8 +96,25 @@ Rule constructors
 > ruleInstName :: Subst -> RuleName -> RuleName
 > ruleInstName su (RuleBasic x ts)  = RuleBasic x (map (apSubst su) ts)
 > ruleInstName su (EqSym r)         = EqSym (ruleInstName su r)
-> ruleInstName su (RuleCut r1 n r2) = RuleCut (ruleInstName su r1) n
->                                             (ruleInstName su r2)
+> ruleInstName su (RuleCut r1 rs)   = ruleCut (ruleInstName su r1)
+>                                       [ (n, ruleInstName su r) | (n,r) <- rs]
+>
+> ruleCut r [] = r
+> ruleCut (RuleCut r rs1) rs2 = ruleCut r (merge rs1 (map renumber rs2))
+>   where
+>   used     = map fst rs1
+>   availMap = [ 1 .. ] `zip` filter (`notElem` used) [ 1 .. ]
+>   renumber (x,p) = let Just y = lookup x availMap in (y,p)
+>
+>   merge as@((x,p) : xs) bs@((y,q) : ys)
+>     | x <= y    = (x,p) : merge xs bs
+>     | otherwise = (y,q) : merge as ys
+>   merge as [] = as
+>   merge [] bs = bs
+>
+> ruleCut r xs = RuleCut r xs
+
+>
 >
 > trivialRule :: Rule -> Bool
 > trivialRule r = all numV (fvs (rConc r))    -- axiom
@@ -117,13 +134,24 @@ Rule constructors
 
 
 > normalize :: Rule -> Rule
-> normalize r = let (sides, others) = partition isSide (rAsmps r)
->               in r { rAsmps = others, rSides = filter nonTriv sides
->                                                               ++ rSides r }
->   where isSide = all numV . fvs
+> normalize r = let (sides, others) = partition isSide (zip [1..] (rAsmps r))
+>               in r { rAsmps = map snd others
+>                    , rSides = filter nonTriv (map snd sides) ++ rSides r
+>                    , rName = -- a bit of a hack
+>                         case rName r of
+>                           RuleBasic x _ | "def-" `isPrefixOf` x -> rName r
+>                           _ -> ruleCut (rName r) (map toProof sides)
+>                    }
+>   where isSide (_,t) = all numV (fvs t)
 >         nonTriv side = case evalSide side of
 >                          Just t  -> not t
 >                          Nothing -> True
+>         toProof (n,x) = (n, RuleBasic (case pPred x of
+>                                          Add -> "def-add"
+>                                          Mul -> "def-mul"
+>                                          Exp -> "def-exp"
+>                                          Leq -> "def-leq") (pArgs x)
+>                         )
 
 
 
@@ -285,7 +313,7 @@ A1,A2 => B
 >      su <- mgu asmp (rConc rarg)
 >      let rfun1 = apSubst su rfun { rAsmps = rest }
 >          rarg1 = apSubst su rarg
->      return rfun1 { rName  = RuleCut (rName rfun1) n (rName rarg1)
+>      return rfun1 { rName  = ruleCut (rName rfun1) [ (n, rName rarg1) ]
 >                   , rAsmps = rAsmps rarg1 ++ rAsmps rfun1
 >                   , rSides = nub (rSides rarg1 ++ rSides rfun1)
 >                   }
@@ -608,9 +636,11 @@ Showing
 >     RuleBasic x [] -> text x
 >     RuleBasic x ts -> text x <> char '@' <>
 >                         parens (hsep $ punctuate comma $ map (text . show) ts)
->     RuleCut r1 n r2 -> text "let argument" <+> integer n <+> text "of"
->                          $$ nest 3 (ppRuleName r1)
->                          $$ text "be" <+> ppRuleName r2
+>     RuleCut r1 rs -> (text "let" <+> vcat (map pp rs))
+>                   $$ text "in" <+> (ppRuleName r1)
+>       where
+>       pp (n,r) = text "argument" <+> integer n <+> text "be" <+> ppRuleName r
+>
 >     EqSym r         -> text "eq-sym" $$ nest 2 (ppRuleName r)
 
 
