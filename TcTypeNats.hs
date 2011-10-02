@@ -4,7 +4,7 @@ module TcTypeNats where
 import Control.Monad(foldM,guard,MonadPlus(..))
 import Debug.Trace
 import qualified Data.Map as M
-import Data.List(union,find)
+import Data.List(find)
 import Data.Maybe(isJust,isNothing)
 
 {-------------------------------------------------------------------------------
@@ -54,6 +54,7 @@ data Theorem  = AssumedFalse
               | EqTrans
               | Cong Pred
               | Sorry
+              | Axiom String
 
 data Proof = ByAsmp EvVar
            | Using Theorem [Term] [Proof]   -- instantiation, sub-proof
@@ -182,7 +183,7 @@ isEmptySet (P ps) = M.null ps
 -- | Remove propositions that do not satisfy the given predicate.
 filterProp :: HasProp a => (a -> Bool) -> Set a -> Set a
 filterProp p (P ps) = P (M.mapMaybeWithKey upd ps)
-  where upd op ts = case filter p ts of
+  where upd _ ts = case filter p ts of
                       [] -> Nothing
                       xs -> Just xs
 
@@ -635,7 +636,7 @@ mgu _ _ _              = mzero
 -- if the substitutions is { ev: x = 3 }, and we have the term "x"
 -- then we would get the term "3" and 'ev', a proof that "x = 3"
 apSubst :: Subst -> Term -> (Term, Proof)
-apSubst su t@(Var x)
+apSubst su (Var x)
   | (t1,ev) : _ <- [ (t1,ev) | (y,t1,ev) <- su, eqType x y ] = (t1,ev)
 apSubst _ t           = (t, byRefl t)
 
