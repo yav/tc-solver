@@ -59,6 +59,13 @@ Utilities for easy input
 > (<==) :: Term -> Term -> Prop
 > t1 <== t2 = Prop Leq [t1,t2]
 
+> data RuleHL = RuleHL String [Prop] Prop
+
+> aRule :: String -> [Prop] -> Prop -> RuleHL
+> aRule = RuleHL
+>
+> rule :: String -> Prop -> RuleHL
+> rule name r = aRule name [] r
 
 
 Rules
@@ -66,56 +73,57 @@ Rules
 > data Rule   = Rule { rAsmps :: [Prop]
 >                    , rSides :: [Prop]      -- only NV vars here
 >                    , rConc  :: Prop
->                    , rName  :: RuleName
+>                    , rProof :: Proof
 >                    }
-
-Rule constructors
-
-> aRule :: String -> [Prop] -> Prop -> Rule
-> aRule name as r = ru
->   where ru = Rule { rAsmps  = as
->                   , rSides  = []
->                   , rConc   = r
->                   , rName   = RuleBasic name (map Var (fvs (as,r)))
->                   }
 >
-> rule :: String -> Prop -> Rule
-> rule name r = aRule name [] r
->
-> axiom :: String -> Prop -> Rule
-> axiom name r = (rule name r) { rSides = [ r ] }
->
-
-
-> data RuleName = RuleBasic String [Term]
->               | RuleCut RuleName [ (Integer,RuleName) ] -- sorted by num
->               | EqSym RuleName
->                 deriving Eq
->
-> -- A smart constructor to avoid successive instantiations.
-> ruleInstName :: Subst -> RuleName -> RuleName
-> ruleInstName su (RuleBasic x ts)  = RuleBasic x (map (apSubst su) ts)
-> ruleInstName su (EqSym r)         = EqSym (ruleInstName su r)
-> ruleInstName su (RuleCut r1 rs)   = ruleCut (ruleInstName su r1)
->                                       [ (n, ruleInstName su r) | (n,r) <- rs]
->
-> ruleCut r [] = r
-> ruleCut (RuleCut r rs1) rs2 = ruleCut r (merge rs1 (map renumber rs2))
+> mkRule :: String -> [Prop] -> Prop -> Rule
+> mkRule name as r = ru
 >   where
->   used     = map fst rs1
->   availMap = [ 1 .. ] `zip` filter (`notElem` used) [ 1 .. ]
->   renumber (x,p) = let Just y = lookup x availMap in (y,p)
+>   ru = Rule
+>     { rAsmps  = asmps
+>     , rSides  = nub ((if isSide r then [r] else []) ++ sides)
+>     , rConc   = r
+>     , rProof  = By name vars [ ByAsmp n | (n,_) <- zip [0..] asmps ]
+>     }
+>   (sides,asmps')  = partition isSide as
+>   asmps           = nub asmps'
+>   isSide          = all numV . fvs
+>   vars            = map Var $ nub $ filter (not . numV) $ fvs (asmps,r)
 >
->   merge as@((x,p) : xs) bs@((y,q) : ys)
->     | x <= y    = (x,p) : merge xs bs
->     | otherwise = (y,q) : merge as ys
->   merge as [] = as
->   merge [] bs = bs
->
-> ruleCut r xs = RuleCut r xs
 
+
+Keeping Track of Proofs
+
+> data Proof    = By String [Term] [Proof]
+>               | ByAsmp !Int
 >
+> instance FVS Proof where
+>   fvs p = case p of
+>             By x ts ps -> fvs (ts,ps)
+>             ByAsmp _   -> []
 >
+>   apSubst su p = case p of
+>                    By x ts ps -> By x (apSubst su ts) (apSubst su ps)
+>                    ByAsmp n   -> ByAsmp n
+>
+> -- Used when new proof arguments come in scope.
+> liftAsmps :: Int -> Proof -> Proof
+> liftAsmps n p = case p of
+>                   By x ts ps -> By x ts (map (liftAsmps n) ps)
+>                   ByAsmp m   -> ByAsmp (m + n)
+>
+> -- Used when we apply a proof argument.
+> defAsmp :: (Int,Proof) -> Proof -> Proof
+> defAsmp d@(n,p) q = case q of
+>                       By x ts ps  -> By x ts (map (defAsmp d) ps)
+>                       ByAsmp m | m < n      -> ByAsmp m
+>                                | m > n      -> ByAsmp (m-1)
+>                                | otherwise  -> p
+
+
+
+Normalization of Rules
+
 > trivialRule :: Rule -> Bool
 > trivialRule r = all numV (fvs (rConc r))    -- axiom
 >              || not (and (mapMaybe evalSide (rSides r))) -- assumes false
@@ -131,27 +139,14 @@ Rule constructors
 >   | Leq <- op = return (x <= y)
 > evalSide _ = mzero
 
-
+See if some of the assumptions are redundant because they can be solved
+with one of the fixed rules that we already know.
 
 > normalize :: Rule -> Rule
-> normalize r = let (sides, others) = partition isSide (zip [1..] (rAsmps r))
->               in r { rAsmps = map snd others
->                    , rSides = filter nonTriv (map snd sides) ++ rSides r
->                    , rName = -- a bit of a hack
->                         case rName r of
->                           RuleBasic x _ | "def-" `isPrefixOf` x -> rName r
->                           _ -> ruleCut (rName r) (map toProof sides)
->                    }
->   where isSide (_,t) = all numV (fvs t)
->         nonTriv side = case evalSide side of
->                          Just t  -> not t
->                          Nothing -> True
->         toProof (n,x) = (n, RuleBasic (case pPred x of
->                                          Add -> "def-add"
->                                          Mul -> "def-mul"
->                                          Exp -> "def-exp"
->                                          Leq -> "def-leq") (pArgs x)
->                         )
+> normalize r = r {-case cutRule r =<< onlyBRules of
+>                 [] -> r
+>                 a : _ -> normalize a-}
+
 
 
 
@@ -162,9 +157,6 @@ The rules
 
 > onlyBRules :: [Rule]
 > onlyBRules = axiomSchemas ++ simpleRules
-
-> namedRules :: [Rule]
-> namedRules = []
 
 > commuteConcs :: [Rule] -> [Rule]
 > commuteConcs rs = rs ++ do r <- rs
@@ -181,10 +173,6 @@ The rules
 >                      (do r <- rs
 >                          c <- axiomSchemas ++ simpleRules
 >                          cutRule r c)
-
-> makeSym :: [Rule] -> [Rule]
-> makeSym rs = rs ++ mapMaybe eqSym rs
-
 
 > srcOfVars :: (String -> Var) -> Integer -> [Term]
 > srcOfVars mk from = do v <- [ from :: Integer .. ]
@@ -211,10 +199,10 @@ Definition schemas for basic functions and relations
 
 > axiomSchemas :: [Rule]
 > axiomSchemas = map toSimpleRule
->   [ axiom "def-add" (x  +  y === z)
->   , axiom "def-mul" (x  *  y === z)
->   , axiom "def-exp" (x ^^^ y === z)
->   , axiom "def-leq" (x <== y)
+>   [ rule "def-add" (x  +  y === z)
+>   , rule "def-mul" (x  *  y === z)
+>   , rule "def-exp" (x ^^^ y === z)
+>   , rule "def-leq" (x <== y)
 >   ]
 >   where x : y : z : _ = srcOfVars NV 0
 
@@ -229,11 +217,11 @@ Definition schemas for basic functions and relations
 >   , rule "root-1"   (x ^^^ 1  === x)
 >   , rule "log-1"    (1 ^^^ x  === 1)
 >   ]
+>   where x : _ = srcOfVars V 0
 
-
+Also, perhaps:
 log_0 = (0 ^ x = y)  <=>  (y <= 1)
 
->   where x : _ = srcOfVars V 0
 
 Commutativity
 
@@ -265,7 +253,7 @@ Commutativity
 >   x : x1 : x2 : y : y1 : y2 : z : z1 : z2 : _ = srcOfVars V 0
 >
 >   funs = do op <- [ Add, Mul, Exp ]
->             return $ aRule ("fun-" ++ show op)
+>             return $ mkRule ("fun-" ++ show op)
 >                    [Prop op [x,y,z1], Prop op [x,y,z2]]
 >                    (Prop Eq [z1,z2])
 >
@@ -277,7 +265,7 @@ Commutativity
 > notSymRules = foldr addRule []
 >             $ specSimple
 >             $ map toSimpleRule
->             $ makeSym
+>             $ concatMap makeSym
 >
 >   -- Associativity
 >   [ rule "add-assoc" $ (x + y) + z === x + (y + z)
@@ -288,10 +276,17 @@ Commutativity
 >   , rule "mul-exp" $ (x * y) ^^^ z === x ^^^ z * y ^^^ z
 >
 >   -- Exponentiation
->   , rule "exp-add" $ x ^^^ (y + z)  === x ^^^ y * x ^^^ z
->   , rule "exp-mul" $ x ^^^ (y * z)  === (x ^^^ y) ^^^ z
+>   , rule "exp-add" $ x ^^^ (y + z) === x ^^^ y * x ^^^ z
+>   , rule "exp-mul" $ x ^^^ (y * z) === (x ^^^ y) ^^^ z
 >   ]
->   where x : y : z : _ = srcOfVars V 0
+>   where
+>   x : y : z : _ = srcOfVars V 0
+>   makeSym r = r : case r of
+>                     RuleHL n as (Prop Eq [x,y])
+>                       -> [ RuleHL (n ++ "-sym") as (Prop Eq [y,x]) ]
+>                     _ -> []
+
+
 
 
 
@@ -307,15 +302,18 @@ A1,A2 => B
 
 > cutRule :: Rule -> Rule -> [Rule]
 > cutRule rfun0 rarg =
->   do let vs   = fvs rarg
->          rfun = fresh vs rfun0
->      (n,(asmp,rest)) <- zip [1 :: Integer .. ] $ choose (rAsmps rfun)
+>   do let vs      = fvs rarg
+>          new     = length (rAsmps rarg)   -- new param for 'rfun'
+>          rfun    = fresh vs rfun0
+>      (((n,asmp),rest)) <- choose (zip [ new .. ] (rAsmps rfun))
 >      su <- mgu asmp (rConc rarg)
->      let rfun1 = apSubst su rfun { rAsmps = rest }
->          rarg1 = apSubst su rarg
->      return rfun1 { rName  = ruleCut (rName rfun1) [ (n, rName rarg1) ]
->                   , rAsmps = rAsmps rarg1 ++ rAsmps rfun1
->                   , rSides = nub (rSides rarg1 ++ rSides rfun1)
+>
+>          -- Add params to be used for the argument
+>      return $ apSubst su rfun
+>                   { rAsmps = rAsmps rarg ++ map snd rest
+>                   , rSides = nub (rSides rarg ++ rSides rfun)
+>                   , rProof = defAsmp (n, rProof rarg)
+>                            $ liftAsmps new (rProof rfun)
 >                   }
 
 
@@ -325,11 +323,15 @@ A => x = y
 ----------
 A => y = x
 
+
+XXX: How do we instantiate this?
+
 > eqSym :: Rule -> Maybe Rule
 > eqSym r = case rConc r of
->             Prop Eq [x,y] -> return r { rConc = Prop Eq [y,x]
->                                       , rName = EqSym (rName r)
->                                       }
+>             Prop Eq [x,y] ->
+>                return r { rConc  = Prop Eq [y,x]
+>                         , rProof = error "unused"
+>                         }
 >             _ -> mzero
 
 
@@ -475,10 +477,8 @@ Rename a variable so that it is different from a set of given names.
 >   apSubst s r = normalize r { rAsmps = apSubst s (rAsmps r)
 >                             , rSides = apSubst s (rSides r)
 >                             , rConc  = apSubst s (rConc r)
->                             , rName  = ruleInstName su' (rName r)
+>                             , rProof = apSubst s (rProof r)
 >                             }
->     where su' = [ (x,t) | (x,t) <- s, x `elem` fvs r ]
->
 >
 > instance Match Rule where
 >   match r1 r2 =
@@ -630,18 +630,14 @@ proof: (A: a * b = x, B: x * c = z, F : a * p = z, G : 1 <= a) -> (b * c = p)
 
 Showing
 
-> ppRuleName :: RuleName -> Doc
-> ppRuleName r0 =
+> ppProof :: Proof -> Doc
+> ppProof r0 =
 >   case r0 of
->     RuleBasic x [] -> text x
->     RuleBasic x ts -> text x <> char '@' <>
->                         parens (hsep $ punctuate comma $ map (text . show) ts)
->     RuleCut r1 rs -> (text "let" <+> vcat (map pp rs))
->                   $$ text "in" <+> (ppRuleName r1)
->       where
->       pp (n,r) = text "argument" <+> integer n <+> text "be" <+> ppRuleName r
->
->     EqSym r         -> text "eq-sym" $$ nest 2 (ppRuleName r)
+>     ByAsmp n -> char '?' <> int n
+>     By x ts ps ->
+>       text x <> (if null ts then empty else char '@' <>
+>                 parens (hsep $ punctuate comma $ map (text . show) ts))
+>       $$ nest 2 (vcat (map ppProof ps))
 
 
 > instance Show Var where
@@ -777,24 +773,24 @@ Showing
 > addAsmp _ = error "addAsmp: I don't know how to simplify this"
 
 >
-> toSimpleRule :: Rule -> Rule
-> toSimpleRule r = mk $ run $ do mapM_ addAsmp (rSides r ++ rAsmps r)
->                                toSimpleProp (rConc r)
->   where mk (x,y) = let ru = Rule { rName   = rName r
->                                  , rAsmps  = y
->                                  , rSides  = []   -- fixed in "normalize"
->                                  , rConc   = x
->                                  }
->                    in normalize ru
+> toSimpleRule :: RuleHL -> Rule
+> toSimpleRule (RuleHL name as c) = mk $ run $ do mapM_ addAsmp as
+>                                                 toSimpleProp c
+>   where mk (x,y) = mkRule name y x
 
 > ppLongRule :: Rule -> Doc
-> ppLongRule r = case (rAsmps r, rSides r) of
->                  ([],[]) -> pp (rConc r)
->                  (as,ss) -> vcat (map pp as) $$
->                             vcat [ text "//" <+> pp s | s <- ss ] $$
->                        text "----------------" $$
->                        pp (rConc r)
+> ppLongRule r = case (rProof r, rAsmps r, rSides r) of
+>                  (By x ts _,as,ss) | length as == length as ->
+>                     vcat (zipWith ppAsmp [0..] as) $$
+>                     vcat [ text "//" <+> pp s | s <- ss ] $$
+>                     text "-------------------------" $$
+>                     ppConc (rProof r) (rConc r)
 >   where pp x = text (show x)
+>         ppAsmp n v = int n <> char ':' <+> pp v
+>         ppConc p v = ppProof p $$ (text ":" <+> pp v)
+>
+> ppLongRules :: [Rule] -> Doc
+> ppLongRules rs = vcat $ punctuate (text "\n") $ map ppLongRule rs
 
 > choose :: [a] -> [(a,[a])]
 > choose [] = []
@@ -912,10 +908,11 @@ They combine the existing assumptions with the new fact to derive more facts.
 
 > data FRule = FRule
 >   { fPats   :: Props -- Existing assumptions
->   , fAdding :: Prop -- New assumption
+>   , fAdding :: (Int,Prop) -- New assumption, and it's position in arg
 >   , fGuards :: [ Guard ]            -- Side congitions
 >   , fBoringGs :: [ Guard ]          -- Uninteresting equality side conditions
 >   , fNew    :: Prop -- Derived fact
+>   , fProof  :: Proof
 >   , fNotes  :: Doc
 >   }
 
@@ -963,9 +960,11 @@ variables.
 
 > instance NonLin FRule where
 >   nonLin r =
->     do ps <- nonLin (propsToList (fPats r))
->        a  <- nonLin (fAdding r)
+>     do ps <- mapM nl (propsToList (fPats r))
+>        a  <- nl (fAdding r)
 >        return r { fPats = propsFromList ps, fAdding = a }
+>     where nl (x,p) = do p1 <- nonLin p
+>                         return (x,p1)
 >
 > instance NonLin BRule where
 >   nonLin r =
@@ -1031,12 +1030,12 @@ If we already know "R", and then we add "r" to it, we can
 construct a new fact "p".  All the variables in "p" should
 be defined in terms of variables in "R" and "r".
 
-
-> toFRule' :: Rule -> [(Prop, Rule)]
+> {-
+> toFRule' :: Rule -> [((Int,Prop), [(Int,Prop)])]
 > toFRule' r =
->   foldr addFRule [] $
->   do (x,xs) <- choose (rAsmps r)
->      return (x, r { rAsmps = xs })
+>   -- foldr addFRule [] $
+>   do (x,xs) <-
+>      return (x, r { rAsmps = map snd xs })
 >
 > sameFRule :: [Var] -> (Prop, Rule) -> (Prop,Rule) -> Bool
 > sameFRule vs1 f1 f2' =
@@ -1046,24 +1045,25 @@ be defined in terms of variables in "R" and "r".
 >
 > addFRule :: (Prop,Rule) -> [(Prop,Rule)] -> [(Prop,Rule)]
 > addFRule x xs = if any (sameFRule (fvs x) x) xs then xs else x : xs
+> -}
 
 
 > toFRule :: Rule -> [FRule]
 > toFRule r =
->   do (e,r1) <- toFRule' r
+>   do (e,rs) <- choose $ zip [ 0 .. ] (rAsmps r)
 >      gs <- maybeToList
->          $ resolveGuards (fvs (e,rAsmps r1))
->                          (fvs (rConc r1))
->                          (rSides r1)
+>          $ resolveGuards (fvs (snd e,map snd rs))
+>                          (fvs (rConc r))
+>                          (rSides r)
 >
->      return FRule { fPats   = propsFromList (rAsmps r1)
+>      return FRule { fPats   = propsFromList rs
 >                   , fAdding = e
 >                   , fBoringGs  = []
 >                   , fGuards = gs
->                   , fNew    = rConc r1
->                   , fNotes  = ppRuleName (rName r1) $$
->                               text "" $$
->                               text "->" <+> (text (show e) $$ ppLongRule r1)
+>                   , fNew    = rConc r
+>                   , fProof  = rProof r
+>                   , fNotes  = text "Adding" <+> int (fst e)
+>                            $$ ppLongRule r
 >                   }
 
 
@@ -1084,22 +1084,17 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >
 >      return BRule { bPats = pats, bNew = y
 >                   , bGuards = hsGuards, bBoringGs =[]
->                   , bNotes = ppRuleName (rName r) $$
+>                   , bNotes = ppProof (rProof r) $$
 >                              text "" $$
 >                              ppLongRule r
 >                   }
 
 
 > solverRules :: ([FRule], [BRule])
-> solverRules = ( concat (map mkFRule onlyFRules ++ fss)
->               , concat (map mkBRule onlyBRules ++ bss)
+> solverRules = ( concat (map mkFRule onlyFRules)
+>               , concat (map mkBRule onlyBRules)
 >               )
 >   where
->   (fss,bss) = unzip
->             $ do rc <- namedRules
->                  return ( mkFRule rc
->                         , mkBRule rc
->                         )
 >   mkFRule = map (rmNonLin forFRule) . toFRule
 >   mkBRule = map (rmNonLin forBRule) . toBRule
 >
@@ -1127,17 +1122,16 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > tuplePat ps = parens $ fsep $ punctuate comma ps
 >
 > listPat :: [Pat] -> Pat
-> listPat ps = brackets $ fsep $ punctuate comma ps
+> listPat = smallList
 
 > smallList :: [Doc] -> Doc
-> smallList ds = brackets $ hsep $ punctuate comma ds
+> smallList = brackets . hsep . punctuate comma
 
 > bigList :: [Doc] -> Doc
 > bigList [] = text "[]"
 > bigList (x : xs) = (text "[" <+> x) $$
 >                   vcat [ comma <+> y | y <- xs ] $$
 >                   text "]"
-
 
 > ppGuards :: [Guard] -> [Guard] -> Doc
 > ppGuards bore gs =
@@ -1177,12 +1171,23 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >     Var x | not (numV x) -> text (show x)
 >     _ -> parens (text "num" <+> text (show t))
 >
-> -- XXX: Add the proof!
-> eqnToExpr :: Prop -> Doc
-> eqnToExpr (Prop op ts) =
->     text "Fact { factProof = bySorry " <> comma <+>
->     text "factProp = Prop" <+> text (opCon op)
->                                <+> smallList (map toExpr ts) <+> text "}"
+> eqnToExpr :: (Int -> Maybe Int) -> Proof -> Prop -> Doc
+> eqnToExpr lkpParam p (Prop op ts) =
+>     text "Fact" <+>
+>       (text "{" <+> text "factProof =" <+> proofToExpr lkpParam p
+>       $$ comma  <+> text "factProp = Prop" <+> text (opCon op)
+>                                   <+> smallList (map toExpr ts)
+>       $$ text "}")
+>
+> proofToExpr :: (Int -> Maybe Int) -> Proof -> Doc
+> proofToExpr lkp (By x ts ps) =
+>   text "Using" <+> parens (text "Axiom" <+> text (show x)) <+>
+>     smallList (map toExpr ts)
+>     $$ nest 2 (bigList (map (proofToExpr lkp) ps))
+> proofToExpr lkp (ByAsmp m) =
+>   case lkp m of
+>     Nothing -> text "new_proof"
+>     Just n  -> text "proof" <> int n
 >
 > bruleToAlt :: BRule -> Doc
 > bruleToAlt r = text "{-" <+> bNotes r <+> text "-}"
@@ -1199,9 +1204,10 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >           $$ nest 2 (vsep (map bruleToAlt bs) $$ text "_ -> Nothing"))
 
 
+> main = main1
 
-> main :: IO ()
-> main = writeFile "TcTypeNatsRules.hs" $ show $
+> main1 :: IO ()
+> main1 = writeFile "TcTypeNatsRules.hs" $ show $
 >   text "-- WARNING: This file is generated automatically!" $$
 >   text "-- WARNING: Do not add interesting changes, as they will be lost." $$
 >   text "--"
@@ -1227,10 +1233,10 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > groupFRules :: [FRule] -> M.Map Op FRulesForOp
 > groupFRules = M.map byAsmps . foldr addHead M.empty
 >   where
->   addHead f     = M.insertWith (++) (pPred (fAdding f)) [f]
+>   addHead f     = M.insertWith (++) (pPred (snd $ fAdding f)) [f]
 >   byAsmps       = foldr addAsmps M.empty
 >   addAsmps f    = M.insertWith (++) key [f]
->     where key   = map cvt $ group $ sort $ map pPred $ propsToList $ fPats f
+>     where key   = map cvt $ group $ sort $ map (pPred . snd) $ propsToList $ fPats f
 >           cvt x = (head x, length x)
 >
 > ppFStats :: (Op,FRulesForOp) -> Doc
@@ -1265,8 +1271,10 @@ frule_Add_2_1_0_0_0 t1 t2 t3 =
 > codeFRules :: M.Map Op (M.Map [(Op,Int)] [FRule]) -> Doc
 > codeFRules m =
 >   text "implied :: Set Fact -> Fact -> [Fact]" $$
->   text "implied" <+> fruleAsmpsName <+> text "newProp = case factProp newProp of" $$
->   nest 2 (vcat (map cases (M.toList m)) $$ text "_ -> []")
+>   text "implied" <+> fruleAsmpsName <+> text "newProp ="
+>     $$ nest 2 (text "let new_proof = factProof newProp in"
+>                 $$ text "case factProp newProp of" $$
+>   nest 2 (vcat (map cases (M.toList m)) $$ text "_ -> []"))
 >   where
 >   cases (op,m1) =
 >     let eqn = Prop op (take ar $ map (Var . V . fruleVar) [ 0 .. ])
@@ -1295,17 +1303,41 @@ frule_Add_2_1_0_0_0 t1 t2 t3 =
 >      ptext "{-" <+> fNotes r <+> text "-}"
 >   $$ text "case" <+> vars <+> text "of"
 >   $$ nest 2 ( tuplePat pats $$ nest 2 (ppGuards (fBoringGs r) (fGuards r)
->                             <+> text "-> return" <+> eqnToExpr (fNew r))
+>                             <+> text "-> return"
+>                             $$ nest 2 (eqnToExpr getProofParam (fProof r) (fNew r)))
 >               $$ text "_ -> mzero"
 >             )
 >   where
 >   vars       = parens $ fsep $ punctuate comma
 >                       $ take (length pats) $ map (text . fruleVar) [ 0 .. ]
->   pats       = map termToPat $ pArgs (fAdding r) ++
->                                                 concatMap getPats fruleOrder
+>   pats       = map termToPat $ pArgs (snd $ fAdding r) ++ paramPats
 >   getPats op = case M.lookup op (fPats r) of
 >                  Nothing  -> []
->                  Just ts  -> concat ts
+>                  Just ts  -> concat $ map snd ts
+>
+>   (paramProofMap, paramPats)  = let (_, res) = mapAccumL doOp 1 fruleOrder
+>                                     (ms,ps)  = unzip res
+>                                 in (concat ms, concat ps)
+>
+>   doOp s op   = case M.lookup op (fPats r) of
+>                   Nothing -> (s, ([],[]))
+>                   Just ts -> ( s + length ts
+>                              , let (ns,ps) = unzip ts
+>                                in (zip ns [ s .. ], concat ps) )
+>
+>   getProofParam n
+>     | n == fst (fAdding r) = Nothing
+>     | otherwise =
+>        case lookup n paramProofMap of
+>          Just m  -> Just m
+>          Nothing -> error
+>                $ unlines ("incomplete proof"
+>                          : show (ppProof (fProof r))
+>                          : ("adding: " ++ show (fst (fAdding r)))
+>                          : map show paramProofMap
+>                          )
+
+
 
 
 Generates code search for assumptions of the appropriate "shape"
@@ -1378,30 +1410,20 @@ Generates code search for assumptions of the appropriate "shape"
 
 --------------------------------------------------------------------------------
 
-The "signature" of an frule is a sequence of number which records how
-many of each type of proposition are needed by the rule, in the
-following order  Add, Mul, Exp, Leq.  So, for example, the signature
-"2_0_0_0" is a rule which has two "Add" patterns and no other patterns.
-
-To check if such (frule) fires 
-
-do [ p1, p2 ] <- nth_product 2 (pAdd props)
-   return (rule RHS)
-
-> type Props = M.Map Op [[Term]]
+> type Props = M.Map Op [(Int,[Term])]
 >
 > noProps :: Props
 > noProps = M.empty
 >
-> addProp :: Prop -> Props -> Props
-> addProp (Prop op ts) props = M.insertWith (++) op [ts] props
+> addProp :: (Int,Prop) -> Props -> Props
+> addProp (n, Prop op ts) props = M.insertWith (++) op [(n,ts)] props
 >
-> propsToList :: Props -> [Prop]
+> propsToList :: Props -> [(Int,Prop)]
 > propsToList props = do (op,tss) <- M.toList props
->                        ts       <- tss
->                        return (Prop op ts)
+>                        (n,ts)   <- tss
+>                        return (n, Prop op ts)
 >
-> propsFromList :: [Prop] -> Props
+> propsFromList :: [(Int,Prop)] -> Props
 > propsFromList = foldr addProp noProps
 
 
