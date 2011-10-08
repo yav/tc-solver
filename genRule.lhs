@@ -674,6 +674,19 @@ Showing
 >                     ss -> text "//" <+> hsep (punctuate comma (map pp ss))
 
 
+> ppLongRule :: Rule -> Doc
+> ppLongRule r = case (rProof r, rAsmps r, rSides r) of
+>                  (By x ts _,as,ss) | length as == length as ->
+>                     vcat (zipWith ppAsmp [0..] as) $$
+>                     vcat [ text "//" <+> pp s | s <- ss ] $$
+>                     text "-------------------------" $$
+>                     ppConc (rProof r) (rConc r)
+>   where pp x = text (show x)
+>         ppAsmp n v = int n <> char ':' <+> pp v
+>         ppConc p v = ppProof p $$ (text ":" <+> pp v)
+>
+> ppLongRules :: [Rule] -> Doc
+> ppLongRules rs = vcat $ punctuate (text "\n") $ map ppLongRule rs
 
 
 == Terms to SimpleTerms ==
@@ -778,23 +791,11 @@ Showing
 >                                                 toSimpleProp c
 >   where mk (x,y) = mkRule name y x
 
-> ppLongRule :: Rule -> Doc
-> ppLongRule r = case (rProof r, rAsmps r, rSides r) of
->                  (By x ts _,as,ss) | length as == length as ->
->                     vcat (zipWith ppAsmp [0..] as) $$
->                     vcat [ text "//" <+> pp s | s <- ss ] $$
->                     text "-------------------------" $$
->                     ppConc (rProof r) (rConc r)
->   where pp x = text (show x)
->         ppAsmp n v = int n <> char ':' <+> pp v
->         ppConc p v = ppProof p $$ (text ":" <+> pp v)
->
-> ppLongRules :: [Rule] -> Doc
-> ppLongRules rs = vcat $ punctuate (text "\n") $ map ppLongRule rs
-
 > choose :: [a] -> [(a,[a])]
 > choose [] = []
 > choose (x : xs) = (x, xs) : [ (y, x:ys) | (y,ys) <- choose xs ]
+
+
 
 == Eliminating Non-linear Patterns ==
 
@@ -876,13 +877,6 @@ Just x <- divide y 5
 >                   , defArg2 = apSubst s (defArg2 d)
 >                   }
 
-> {-
->   match d1 d2 = do guard (defPartial d1 == defPartial d2)
->                    guard (defOp d1 == defOp d2)
->                    match (defArg1 d1, defArg2 d1) (defArg1 d2, defArg2 d2)
-> -}
-
-
 
 > scDefs :: Prop -> [ (Var, Defn) ]
 > scDefs (Prop op [x1,x2,x3])
@@ -907,13 +901,13 @@ Just x <- divide y 5
 They combine the existing assumptions with the new fact to derive more facts.
 
 > data FRule = FRule
->   { fPats   :: Props -- Existing assumptions
->   , fAdding :: (Int,Prop) -- New assumption, and it's position in arg
->   , fGuards :: [ Guard ]            -- Side congitions
->   , fBoringGs :: [ Guard ]          -- Uninteresting equality side conditions
->   , fNew    :: Prop -- Derived fact
->   , fProof  :: Proof
->   , fNotes  :: Doc
+>   { fPats   :: Props        -- Existing assumptions
+>   , fAdding :: (Int,Prop)   -- New assumption, and it's position in arg
+>   , fGuards :: [ Guard ]    -- Side conditions
+>   , fBoringGs :: [ Guard ]  -- Uninteresting equality side conditions
+>   , fNew    :: Prop         -- Derived fact
+>   , fProof  :: Proof        -- Proof of the derived fact
+>   , fNotes  :: Doc          -- Additional comments
 >   }
 
 
