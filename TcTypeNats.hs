@@ -79,7 +79,6 @@ data Theorem  = AssumedFalse
 
 data Proof = ByAsmp EvVar
            | Using Theorem [Term] [Proof]   -- instantiation, sub-proof
-   --        | ProofLet EvVar Proof Proof
              deriving Show
 
 byRefl :: Term -> Proof
@@ -112,7 +111,6 @@ proofLet :: EvVar -> Proof -> Proof -> Proof
 proofLet x p1 (ByAsmp y) | x == y     = p1
                          | otherwise  = ByAsmp y
 proofLet x p1 (Using t ts ps) = Using t ts (map (proofLet x p1) ps)
--- proofLet x p1 p2 = ProofLet x p1 p2
 
 
 byFalse :: Proof
@@ -122,10 +120,6 @@ ppProof :: Proof -> Doc
 ppProof pr =
   case pr of
     ByAsmp e -> text e
-{-
-    ProofLet x p1 p2 -> text "let" <+> text x <+> text "=" <+> ppProof p1
-                      <+> text "in" $$ ppProof p2 -}
-
     Using x ts ps -> text (show x) <> inst $$ nest 2 (vcat (map ppProof ps))
       where inst = case ts of
                      [] -> empty
