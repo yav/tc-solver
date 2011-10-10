@@ -38,14 +38,17 @@ var next = 0;
 function populate_list(name, vals) {
   var gl = document.getElementById("inertGiven");
   var wl = document.getElementById("inertWanted");
+  var pr = document.getElementById("proofs");
 
   while(gl.firstChild) gl.removeChild(gl.firstChild);
   while(wl.firstChild) wl.removeChild(wl.firstChild);
+  while(pr.firstChild) pr.removeChild(pr.firstChild);
 
   for (var i in vals) {
     var n = document.createElement("li");
-    n.innerHTML= vals[i][1];
-    var l = (vals[i][0] == "Wanted") ? wl : gl;
+    n.innerHTML= "<pre>"+vals[i][1]+"</pre>";
+    var l = (vals[i][0] == "Wanted") ? wl :
+            (vals[i][0] == "Given" ) ? gl : pr;
     l.insertBefore(n,l.lastChild);
   }
 }
@@ -129,17 +132,11 @@ Wanted:
 </div>
 
 <div class="out">
-Inert Set:
-<div>
-<div class="out">
-Given:
-<ol id="inertGiven"></ol>
-</div>
-<div class="out">
-Wanted:
-<ol id="inertWanted"></ol>
-</div>
-</div>
+  Inert Set:
+  <div><div class="out">Given: <ol id="inertGiven"></ol></div>
+       <div class="out">Wanted:<ol id="inertWanted"></ol></div>
+       <div class="out">Proofs:<ol id="proofs"></ol></div>
+  </div>
 </div>
 
 </body>

@@ -15,6 +15,7 @@ import System.Exit(ExitCode(..))
 import Text.ParserCombinators.ReadP
 import Debug.Trace
 import System.Info
+import Text.PrettyPrint hiding (char)
 
 
 import TcTypeNats
@@ -70,14 +71,14 @@ data Cmd = AddC Int [WorkItem] | RmC Int deriving Show
 data WorkItem = Given Fact | Wanted Goal deriving Show
 
 data S = S { entered  :: M.Map Int [WorkItem]
-           , inertSet :: Maybe PropSet
+           , inertSet :: Maybe SolverS
            }
 
 initS :: S
-initS = S { entered = M.empty, inertSet = Just emptyPropSet }
+initS = S { entered = M.empty, inertSet = Just (emptyPropSet, []) }
 
 
-addWorkItemsUI :: (Int,[WorkItem]) -> InertSet -> Maybe InertSet
+addWorkItemsUI :: (Int,[WorkItem]) -> SolverS -> Maybe SolverS
 addWorkItemsUI (n,ws) is = addWorkItems set is ('w' : show n) (length ws + 1)
   where set = PropSet { wanted = setFromList [ w | Wanted w <- ws ]
                       , given  = setFromList [ g | Given g  <- ws ]
@@ -90,8 +91,9 @@ processCmd cmd s =
                    , inertSet  = addWorkItemsUI (x,wi) =<< inertSet s
                    }
     RmC x     -> S { entered   = ents
-                   , inertSet  = foldM (flip addWorkItemsUI) emptyPropSet
-                                                      (M.toList ents)
+                   , inertSet  = foldM (flip addWorkItemsUI)
+                                       (emptyPropSet, [])
+                                       (M.toList ents)
                    }
       where ents = M.delete x (entered s)
 
@@ -187,12 +189,16 @@ renderWI :: WorkItem -> String
 renderWI (Wanted w) = list [ show "Wanted", show (show (goalProp w)) ]
 renderWI (Given  f) = list [ show "Given",  show (show (factProp f)) ]
 
-renderIS :: Maybe PropSet -> String
-renderIS Nothing = "[ [\"Wanted\",\"(inconsistent)\"]," ++
-                     "[\"Given\", \"(inconsistent)\"] ]"
-renderIS (Just xs) =
-  list ( [ renderWI (Given g)  | g <- setToList (given xs) ] ++
-         [ renderWI (Wanted w) | w <- setToList (wanted xs) ])
+renderIS :: Maybe SolverS -> String
+renderIS Nothing = list [ list [ show "Wanted", show "(inconsistent)" ]
+                        , list [ show "Given",  show "(inconsistent)" ]
+                        ]
+renderIS (Just (xs,ps)) =
+  list ( [ renderWI (Given g)  | g <- setToList (given xs)  ] ++
+         [ renderWI (Wanted w) | w <- setToList (wanted xs) ] ++
+         [ list [ show "Proof", show $ ppp p ] | p <- ps ]
+       )
+  where ppp (x,y) = show (text x <+> text ":" <+> ppProof y)
 
 list xs = "[" ++ concat (intersperse "," xs) ++ "]"
 

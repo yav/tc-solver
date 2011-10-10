@@ -6,6 +6,7 @@ import Debug.Trace
 import qualified Data.Map as M
 import Data.List(find)
 import Data.Maybe(isJust,isNothing)
+import Text.PrettyPrint
 
 {-------------------------------------------------------------------------------
 Terms and Propositions
@@ -71,28 +72,66 @@ data Theorem  = AssumedFalse
               | AddAssocSym | MulAssocSym | AddMulSym
               | MulExpSym | ExpAddSym | ExpMulSym
               | FunAdd | FunMul | FunExp
+                deriving Show
 
 
 
 
 data Proof = ByAsmp EvVar
            | Using Theorem [Term] [Proof]   -- instantiation, sub-proof
-           | ProofLet EvVar Proof Proof
+   --        | ProofLet EvVar Proof Proof
+             deriving Show
 
 byRefl :: Term -> Proof
 byRefl t = Using EqRefl [t] []
 
 bySym :: Term -> Term -> Proof -> Proof
+bySym _ _ p@(Using EqRefl _ _) = p
+bySym _ _ (Using EqSym _ [p]) = p
 bySym t1 t2 p = Using EqSym [t1,t2] [p]
 
 byTrans :: Term -> Term -> Term -> Proof -> Proof -> Proof
+-- byTrans t1 t2 _ p1 p2 = byCong Eq [ bySym t1 t2 p1, p2 ] (byRefl t2)
+-- (r = s, s = t) => r = t
+-- cong = (s = r, s = t, s = s
+byTrans _ _ _ (Using EqRefl _ _) p = p
+byTrans _ _ _ p (Using EqRefl _ _) = p
 byTrans t1 t2 t3 p1 p2 = Using EqTrans [t1,t2,t3] [p1,p2]
 
+-- (x1 = y1, x2 = y2, P x1 x2) => P y1 y2
 byCong :: Pred -> [Proof] -> Proof -> Proof
+byCong p qs q | all isRefl qs = q
+  where isRefl (Using EqRefl _ _) = True
+        isRefl _ = False
 byCong p qs q = Using (Cong p) [] (qs ++ [q])
+
+
+proofLet :: EvVar -> Proof -> Proof -> Proof
+proofLet x p1 (ByAsmp y) | x == y     = p1
+                         | otherwise  = ByAsmp y
+proofLet x p1 (Using t ts ps) = Using t ts (map (proofLet x p1) ps)
+-- proofLet x p1 p2 = ProofLet x p1 p2
+
 
 byFalse :: Proof
 byFalse = Using AssumedFalse [] []
+
+ppProof :: Proof -> Doc
+ppProof pr =
+  case pr of
+    ByAsmp e -> text e
+{-
+    ProofLet x p1 p2 -> text "let" <+> text x <+> text "=" <+> ppProof p1
+                      <+> text "in" $$ ppProof p2 -}
+
+    Using x ts ps -> text (show x) <> inst <+> pros
+      where inst = case ts of
+                     [] -> empty
+                     _  -> text "@" <> parens (fsep $ punctuate comma
+                                                    $ map (text . show) ts)
+            pros = case ps of
+                     [] -> empty
+                     _  -> parens $ vcat $ punctuate comma $ map ppProof ps
 
 
 -- | This is used when we want to try to solve a new goal, in terms
@@ -538,7 +577,7 @@ entails ps' p' =
          case solve ps (goalProp p) of
 
            Just proof ->
-             return (YesIf emptySet $ ProofLet (goalName p) proof p_su)
+             return (YesIf emptySet $ proofLet (goalName p) proof p_su)
 
            Nothing ->
 
@@ -580,8 +619,8 @@ entails ps' p' =
                          -- It worked!
                          Just proof ->
                              return $ YesIf (setFromList eqns)
-                                    $ ProofLet (goalName p1) proof
-                                    $ ProofLet (goalName p)  p_su2 p_su
+                                    $ proofLet (goalName p1) proof
+                                    $ proofLet (goalName p)  p_su2 p_su
 
 closure :: Set Fact -> Maybe (Subst, Set Fact)
 closure ps = closure1 =<< improvingSubst ps
@@ -773,38 +812,40 @@ inert set.
 
 If successful, both functions return a \Verb"PassResult" value, which
 contains an updated inert set and, potentially, some additional propositions
-that need to be added to the set.  The actual sover just keeps using these
+that need to be added to the set.  The actual solver just keeps using these
 two functions until it runs out of work to do.
 Note that we start by first adding all assumptions, and only then we consider
 the goals because the assumptions might help us to solve the goals.
 -------------------------------------------------------------------------------}
 
+type SolverS = (InertSet, [(EvVar,Proof)])
 
-addWorkItems :: PropSet -> InertSet -> String -> Int -> Maybe InertSet
+addWorkItems :: PropSet -> SolverS -> String -> Int -> Maybe SolverS
 addWorkItems ps is r s = fst `fmap` runTCN (addWorkItemsM ps is) r s
 
-addWorkItemsM :: PropSet -> InertSet -> TCN InertSet
-addWorkItemsM ps is =
+addWorkItemsM :: PropSet -> SolverS -> TCN SolverS
+addWorkItemsM ps ss@(is,solns) =
  case getOne (given ps) of
    Just (g,gs) ->
      do r <- addGiven g is
         let js = mkInert (insertGiven g) r
-        addWorkItemsM (unionPropSets (newWork r) ps { given = gs }) js
+        addWorkItemsM (unionPropSets (newWork r) ps { given = gs }) (js,solns)
 
    Nothing ->
      case getOne (wanted ps) of
        Just (w,ws) ->
          do r <- addWanted w is
             let js = mkInert (insertWanted w) r
-            addWorkItemsM (unionPropSets (newWork r) ps { wanted = ws }) js
-       Nothing -> return is
+            addWorkItemsM (unionPropSets (newWork r) ps { wanted = ws })
+                                          (js, solvedWanted r ++ solns)
+       Nothing -> return ss
 
   where
   mkInert add r =
     let as = case dropWanted r of
                [] -> is
                ns -> is { wanted = filterProp (keep ns) (wanted is) }
-                  in if consumed r then as else add as
+    in if consumed r then as else add as
   keep ns p = not (goalName p `elem` ns)
 
 
