@@ -53,7 +53,7 @@ data Theorem  = AssumedFalse
               | EqRefl      -- forall a. a = a
               | EqSym       -- forall a b. (a = b) => b = a
               | EqTrans     -- forall a b c. (a = b, b = c) => a = c
-              | Cong Pred
+              | Cong Pred   -- forall xs ys. (xs = ys, F xs) => F ys
               | AddLeq
               | MulLeq
               | ExpLeq1
@@ -99,11 +99,13 @@ byTrans _ _ _ p (Using EqRefl _ _) = p
 byTrans t1 t2 t3 p1 p2 = Using EqTrans [t1,t2,t3] [p1,p2]
 
 -- (x1 = y1, x2 = y2, P x1 x2) => P y1 y2
-byCong :: Pred -> [Proof] -> Proof -> Proof
-byCong p qs q | all isRefl qs = q
+byCong :: Pred -> [Term] -> [Proof] -> Proof -> Proof
+byCong p _ qs q | all isRefl qs = q
   where isRefl (Using EqRefl _ _) = True
         isRefl _ = False
-byCong p qs q = Using (Cong p) [] (qs ++ [q])
+byCong Eq [x1,x2,y1,y2] [ xy1, xy2 ] xx =
+                  byTrans y1 x2 y2 (byTrans y1 x1 x2 (bySym x1 y1 xy1) xx) xy2
+byCong p ts qs q = Using (Cong p) [] (qs ++ [q])
 
 
 proofLet :: EvVar -> Proof -> Proof -> Proof
@@ -703,13 +705,15 @@ impGoal su p
   | null su || propArgs p == ts  = return (p, ByAsmp (goalName p))
   | otherwise = do g <- newGoal (Prop (propPred p) ts)
                    return (g, byCong (propPred p)
+                                (ts ++ propArgs p)
                                 (zipWith3 bySym (propArgs p) ts evs)
                                 (ByAsmp (goalName g)))
   where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
 
 -- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
 impAsmp :: Subst -> Fact -> Fact
-impAsmp su p = p { factProof = byCong (propPred p) evs (factProof p)
+impAsmp su p = p { factProof = byCong (propPred p) (propArgs p ++ ts)
+                                                          evs (factProof p)
                  , factProp  = Prop (propPred p) ts
                  }
   where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
