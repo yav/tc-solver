@@ -110,6 +110,12 @@ byCong p ts qs q = Using (Cong p) ts (qs ++ [q])
 proofLet :: EvVar -> Proof -> Proof -> Proof
 proofLet x p1 (ByAsmp y) | x == y     = p1
                          | otherwise  = ByAsmp y
+proofLet x p1 (Using EqTrans [t1,t2,t3] [s1,s2]) =
+  byTrans t1 t2 t3 (proofLet x p1 s1) (proofLet x p1 s2)
+proofLet x p1 (Using EqSym [t1,t2] [s1]) =
+  bySym t1 t2 (proofLet x p1 s1)
+proofLet x p1 (Using (Cong p) ts ss) = byCong p ts (init ss1) (last ss1)
+  where ss1 = map (proofLet x p1) ss
 proofLet x p1 (Using t ts ps) = Using t ts (map (proofLet x p1) ps)
 
 
