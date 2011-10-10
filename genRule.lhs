@@ -937,6 +937,7 @@ They combine the existing assumptions with the new fact to derive more facts.
 >   { bPats     :: [ Prop ]   -- Existing assumptions
 >   , bGuards   :: [ Guard ]  -- Side conditions
 >   , bBoringGs :: [ Guard ]  -- Uninteresting equality side conditions
+>   , bProof    :: Proof      -- Proof for the new fact
 >   , bNew      :: Prop       -- Fact that can be solved
 >   , bNotes    :: Doc
 >   }
@@ -1096,11 +1097,10 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >                                                           ++ show r) mzero
 >          Just t -> return t
 >
->      return BRule { bPats = pats, bNew = y
+>      return BRule { bPats   = pats, bNew = y
 >                   , bGuards = hsGuards, bBoringGs =[]
->                   , bNotes = ppProof (rProof r) $$
->                              text "" $$
->                              ppLongRule r
+>                   , bProof  = rProof r
+>                   , bNotes  = ppLongRule r
 >                   }
 
 
@@ -1207,7 +1207,10 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > bruleToAlt r = text "{-" <+> bNotes r <+> text "-}"
 >               $$ eqnsToPat (bNew r : bPats r)
 >               $$ nest 2 (ppGuards (bBoringGs r) (bGuards r)
->               $$ text "->" <+> text "Just bySorry")
+>               $$ text "->" <+> text "Just" <+>
+>                     parens (proofToExpr bindAsmps (bProof r)))
+>   where bindAsmps _ = Nothing -- XXX: Implement this to use brules with
+>                               -- assumptions.
 >
 > solveFun :: (Int, [BRule]) -> Doc
 > solveFun (_,[]) = error "bug: solveFun []"
