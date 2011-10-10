@@ -7,6 +7,7 @@ import qualified Data.Map as M
 import Data.List(find)
 import Data.Maybe(isJust,isNothing)
 import Text.PrettyPrint
+import Data.List(zipWith5)
 
 {-------------------------------------------------------------------------------
 Terms and Propositions
@@ -22,6 +23,15 @@ data Term = Var Var
 
 data Pred = Add | Mul | Exp | Leq | Eq
             deriving (Eq, Ord)
+
+arity :: Pred -> Int
+arity pr =
+  case pr of
+    Add -> 3
+    Mul -> 3
+    Exp -> 3
+    Leq -> 2
+    Eq  -> 2
 
 data Prop = Prop Pred [Term]
 data Goal = Goal { goalName  :: EvVar, goalProp :: Prop }
@@ -102,8 +112,21 @@ byCong :: Pred -> [Term] -> [Proof] -> Proof -> Proof
 byCong p _ qs q | all isRefl qs = q
   where isRefl (Using EqRefl _ _) = True
         isRefl _ = False
+-- (x1 == y1, x2 == y2, x1 == x2) => y1 = y2
 byCong Eq [x1,x2,y1,y2] [ xy1, xy2 ] xx =
                   byTrans y1 x2 y2 (byTrans y1 x1 x2 (bySym x1 y1 xy1) xx) xy2
+-- (p1: x1 = y1, p2: x2 = y2,
+--     byCong (q1 : a1 = x1) (q2 : a2 = x2) (q : F z1 z2) : F y1 y2)
+-- => byCong F (as ++ ys) (trans q1 p1, trans q2 p2) q
+byCong p ts ps (Using (Cong _) us qs0) =
+  let qs = init qs0
+      q  = last qs0
+
+      as      = take (arity p) us
+      (xs,ys) = splitAt (arity p) ts
+
+  in byCong p (as ++ ys) (zipWith5 byTrans as xs ys qs ps) q
+
 byCong p ts qs q = Using (Cong p) ts (qs ++ [q])
 
 
