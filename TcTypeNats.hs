@@ -126,14 +126,11 @@ ppProof pr =
     ProofLet x p1 p2 -> text "let" <+> text x <+> text "=" <+> ppProof p1
                       <+> text "in" $$ ppProof p2 -}
 
-    Using x ts ps -> text (show x) <> inst <+> pros
+    Using x ts ps -> text (show x) <> inst $$ nest 2 (vcat (map ppProof ps))
       where inst = case ts of
                      [] -> empty
                      _  -> text "@" <> parens (fsep $ punctuate comma
                                                     $ map (text . show) ts)
-            pros = case ps of
-                     [] -> empty
-                     _  -> parens $ vcat $ punctuate comma $ map ppProof ps
 
 
 -- | This is used when we want to try to solve a new goal, in terms
