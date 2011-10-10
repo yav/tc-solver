@@ -82,28 +82,37 @@ Rules
 >   where
 >   ru = Rule
 >     { rAsmps  = asmps
->     , rSides  = nub ((if isSide r then [r] else []) ++ sides)
+>     , rSides  = nub ((if isAx then [r] else []) ++ sides)
 >     , rConc   = r
->     , rProof  = By name vars [ ByAsmp n | (n,_) <- zip [0..] asmps ]
+>     , rProof  = By thm vars [ ByAsmp n | (n,_) <- zip [0..] asmps ]
 >     }
+>   isAx            = isSide r
 >   (sides,asmps')  = partition isSide as
 >   asmps           = nub asmps'
 >   vars            = map Var $ nub $ filter (not . numV) $ fvs (asmps,r)
+>   thm             = Thm name (if isAx then pArgs r else [])
 
 
 Keeping Track of Proofs
 
-> data Proof    = By String [Term] [Proof]    -- Using an axiom
+> data Theorem  = Thm String [Term]
+>
+> data Proof    = By Theorem [Term] [Proof]   -- Using an existing fact
 >               | ByAsmp !Int                 -- Using an assumption
 >
 > instance FVS Proof where
 >   fvs p = case p of
->             By _ ts ps -> fvs (ts,ps)
+>             By x ts ps -> fvs (x, (ts,ps))
 >             ByAsmp _   -> []
 >
->   apSubst su p = case p of
->                    By x ts ps -> By x (apSubst su ts) (apSubst su ps)
->                    ByAsmp n   -> ByAsmp n
+>   apSubst su p =
+>     case p of
+>       By x ts ps -> By (apSubst su x) (apSubst su ts) (apSubst su ps)
+>       ByAsmp n   -> ByAsmp n
+>
+> instance FVS Theorem where
+>   fvs (Thm _ ts) = fvs ts
+>   apSubst su (Thm a ts) = Thm a (apSubst su ts)
 >
 > -- Used when new proof arguments come in scope.
 > liftAsmps :: Int -> Proof -> Proof
@@ -154,12 +163,12 @@ with one of the fixed rules that we already know.
 >                    } bs ps
 >        | otherwise -> check (n+1) r ((p:) . bs) ps
 >
->   toProof (Prop op _) =
+>   toProof (Prop op ps) =
 >     By (case op of
->           Add -> "DefAdd"
->           Mul -> "DefMul"
->           Exp -> "DefExp"
->           Leq -> "DefLeq"
+>           Add -> Thm "DefAdd" ps
+>           Mul -> Thm "DefMul" ps
+>           Exp -> Thm "DefExp" ps
+>           Leq -> Thm "DefLeq" ps
 >           Eq  -> error "Eq Asmp (this could be done by ref)"
 >        ) [] []
 
@@ -652,9 +661,13 @@ Showing
 >   case r0 of
 >     ByAsmp n -> char '?' <> int n
 >     By x ts ps ->
->       text x <> (if null ts then empty else char '@' <>
->                 parens (hsep $ punctuate comma $ map (text . show) ts))
+>       ppTheorem x <> (if null ts then empty else char '@' <>
+>                       parens (hsep $ punctuate comma $ map (text . show) ts))
 >       $$ nest 2 (vcat (map ppProof ps))
+>
+> ppTheorem :: Theorem -> Doc
+> ppTheorem (Thm x [])  = text x
+> ppTheorem (Thm x ts)  = parens (text x <+> fsep (map (text . show) ts))
 
 
 > instance Show Var where
@@ -1193,7 +1206,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >
 > proofToExpr :: (Int -> Maybe Int) -> Proof -> Doc
 > proofToExpr lkp (By x ts ps) =
->   hang (text "Using" <+> text x <+> smallList (map toExpr ts)) 2
+>   hang (text "Using" <+> ppTheorem x <+> smallList (map toExpr ts)) 2
 >        (bigList (map (proofToExpr lkp) ps))
 > proofToExpr lkp (ByAsmp m) =
 >   case lkp m of

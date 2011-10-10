@@ -58,10 +58,10 @@ data Theorem  = AssumedFalse
               | MulLeq
               | ExpLeq1
               | ExpLeq2
-              | DefAdd
-              | DefMul
-              | DefExp
-              | DefLeq
+              | DefAdd Integer Integer Integer
+              | DefMul Integer Integer Integer
+              | DefExp Integer Integer Integer
+              | DefLeq Integer Integer
               | LeqRefl
               | LeqAsym
               | LeqTrans
