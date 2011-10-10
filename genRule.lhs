@@ -142,11 +142,8 @@ See if some of the assumptions are redundant because they can be solved
 with one of the fixed rules that we already know.
 
 > normalize :: Rule -> Rule
-> normalize r0  = res {-
->   trace "Normalizing:" $ trace (show (ppLongRule r0)) $
->   trace "Result:" $ trace (show (ppLongRule res)) $ res -}
+> normalize r0 = check 0 r0 id (rAsmps r0)
 >   where
->   res = check 0 r0 id (rAsmps r0)
 >   check n r bs as =
 >     case as of
 >       [] -> r { rAsmps = bs [] }
@@ -159,10 +156,10 @@ with one of the fixed rules that we already know.
 >
 >   toProof (Prop op _) =
 >     By (case op of
->           Add -> "def-add"
->           Mul -> "def-mul"
->           Exp -> "def-exp"
->           Leq -> "def-leq"
+>           Add -> "DefAdd"
+>           Mul -> "DefMul"
+>           Exp -> "DefExp"
+>           Leq -> "DefLeq"
 >           Eq  -> error "Eq Asmp (this could be done by ref)"
 >        ) [] []
 
@@ -172,7 +169,8 @@ with one of the fixed rules that we already know.
 The rules
 
 > onlyFRules :: [Rule]
-> onlyFRules = foldr addRule [] (commRules ++ asmpRules ++ leqRules ++ notSymRules)
+> onlyFRules = foldr addRule []
+>                   (commRules ++ asmpRules ++ leqRules ++ notSymRules)
 
 > onlyBRules :: [Rule]
 > onlyBRules = axiomSchemas ++ simpleRules
@@ -205,10 +203,10 @@ The rules
 >          $ specSimple
 >          $ commuteAsmps
 >          $ map toSimpleRule
->          [ aRule "add-leq"    [ x  +  y === z          ] (x <== z)
->          , aRule "mul-leq"    [ x  *  y === z, 1 <== y ] (x <== z)
->          , aRule "exp-leq-1"  [ x ^^^ y === z, 1 <== y ] (x <== z)
->          , aRule "exp-leq-2"  [ x ^^^ y === z, 2 <== x ] (y <== z)
+>          [ aRule "AddLeq"   [ x  +  y === z          ] (x <== z)
+>          , aRule "MulLeq"   [ x  *  y === z, 1 <== y ] (x <== z)
+>          , aRule "ExpLeq1"  [ x ^^^ y === z, 1 <== y ] (x <== z)
+>          , aRule "ExpLeq2"  [ x ^^^ y === z, 2 <== x ] (y <== z)
 >          ]
 >   where
 >   x : y : z : _ = srcOfVars V 0
@@ -218,23 +216,23 @@ Definition schemas for basic functions and relations
 
 > axiomSchemas :: [Rule]
 > axiomSchemas = map toSimpleRule
->   [ rule "def-add" (x  +  y === z)
->   , rule "def-mul" (x  *  y === z)
->   , rule "def-exp" (x ^^^ y === z)
->   , rule "def-leq" (x <== y)
+>   [ rule "DefAdd" (x  +  y === z)
+>   , rule "DefMul" (x  *  y === z)
+>   , rule "DefExp" (x ^^^ y === z)
+>   , rule "DefLeq" (x <== y)
 >   ]
 >   where x : y : z : _ = srcOfVars NV 0
 
 > simpleRules :: [Rule]
 > simpleRules = commuteConcs $ map toSimpleRule $
->   [ rule "leq-refl" (x <== x)
->   , rule "leq-0"    (0 <== x)
->   , rule "add-0"    (x  +  0  === x)
->   , rule "mul-0"    (x  *  0  === 0)
->   , rule "mul-1"    (x  *  1  === x)
->   , rule "root-0"   (x ^^^ 0  === 1)
->   , rule "root-1"   (x ^^^ 1  === x)
->   , rule "log-1"    (1 ^^^ x  === 1)
+>   [ rule "LeqRefl" (x <== x)
+>   , rule "Leq0"    (0 <== x)
+>   , rule "Add0"    (x  +  0  === x)
+>   , rule "Mul0"    (x  *  0  === 0)
+>   , rule "Mul1"    (x  *  1  === x)
+>   , rule "Root0"   (x ^^^ 0  === 1)
+>   , rule "Root1"   (x ^^^ 1  === x)
+>   , rule "Log1"    (1 ^^^ x  === 1)
 >   ]
 >   where x : _ = srcOfVars V 0
 
@@ -246,8 +244,8 @@ Commutativity
 
 > commRules :: [Rule]
 > commRules = map toSimpleRule
->   [ rule "add-comm" (x + y === y + x)
->   , rule "mul-comm" (x * y === y * x)
+>   [ rule "AddComm" (x + y === y + x)
+>   , rule "MulComm" (x * y === y * x)
 >   ]
 >   where x : y : _ = srcOfVars V 0
 
@@ -258,21 +256,21 @@ Commutativity
 >     specSimple $
 >     funs ++
 >     map toSimpleRule (
->     [ aRule "sub-L"     [ x1  +  y  === x2  +  y           ] (x1 === x2)
->     , aRule "sub-R"     [ x   + y1  === x   +  y2          ] (y1 === y2)
->     , aRule "div-L"     [ x1  *  y  === x2  *  y,  1 <== y ] (x1 === x2)
->     , aRule "div-R"     [ x   * y1  === x   *  y2, 1 <== x ] (y1 === y2)
->     , aRule "root"      [ x1 ^^^ y  === x2 ^^^ y,  1 <== y ] (x1 === x2)
->     , aRule "log"       [ x  ^^^ y1 === x  ^^^ y2, 2 <== x ] (y1 === y2)
->     , aRule "leq-asym"  [ x <== y, y <== x ]                 (x === y)
->     , aRule "leq-trans" [ x <== y, y <== z ]                 (x <== z)
+>     [ aRule "SubL"     [ x1  +  y  === x2  +  y           ] (x1 === x2)
+>     , aRule "SubR"     [ x   + y1  === x   +  y2          ] (y1 === y2)
+>     , aRule "DivL"     [ x1  *  y  === x2  *  y,  1 <== y ] (x1 === x2)
+>     , aRule "DivR"     [ x   * y1  === x   *  y2, 1 <== x ] (y1 === y2)
+>     , aRule "Root"     [ x1 ^^^ y  === x2 ^^^ y,  1 <== y ] (x1 === x2)
+>     , aRule "Log"      [ x  ^^^ y1 === x  ^^^ y2, 2 <== x ] (y1 === y2)
+>     , aRule "LeqAsym"  [ x <== y, y <== x ]                 (x === y)
+>     , aRule "LeqTrans" [ x <== y, y <== z ]                 (x <== z)
 >     ]
 >     )
 >   where
 >   x : x1 : x2 : y : y1 : y2 : z : z1 : z2 : _ = srcOfVars V 0
 >
->   funs = do op <- [ Add, Mul, Exp ]
->             return $ mkRule ("fun-" ++ show op)
+>   funs = do (op,name) <- [ (Add,"Add"), (Mul,"Mul"), (Exp,"Exp") ]
+>             return $ mkRule ("Fun" ++ name)
 >                    [Prop op [x,y,z1], Prop op [x,y,z2]]
 >                    (Prop Eq [z1,z2])
 >
@@ -287,22 +285,22 @@ Commutativity
 >             $ concatMap makeSym
 >
 >   -- Associativity
->   [ rule "add-assoc" $ (x + y) + z === x + (y + z)
->   , rule "mul-assoc" $ (x * y) * z === x * (y * z)
+>   [ rule "AddAssoc" $ (x + y) + z === x + (y + z)
+>   , rule "MulAssoc" $ (x * y) * z === x * (y * z)
 >
 >   -- Distributivity
->   , rule "add-mul" $ (x + y)  *  z === x  *  z + y *   z
->   , rule "mul-exp" $ (x * y) ^^^ z === x ^^^ z * y ^^^ z
+>   , rule "AddMul" $ (x + y)  *  z === x  *  z + y *   z
+>   , rule "MulExp" $ (x * y) ^^^ z === x ^^^ z * y ^^^ z
 >
 >   -- Exponentiation
->   , rule "exp-add" $ x ^^^ (y + z) === x ^^^ y * x ^^^ z
->   , rule "exp-mul" $ x ^^^ (y * z) === (x ^^^ y) ^^^ z
+>   , rule "ExpAdd" $ x ^^^ (y + z) === x ^^^ y * x ^^^ z
+>   , rule "ExpMul" $ x ^^^ (y * z) === (x ^^^ y) ^^^ z
 >   ]
 >   where
 >   x : y : z : _ = srcOfVars V 0
 >   makeSym r = r : case r of
 >                     RuleHL n as (Prop Eq [p,q])
->                       -> [ RuleHL (n ++ "-sym") as (Prop Eq [q,p]) ]
+>                       -> [ RuleHL (n ++ "Sym") as (Prop Eq [q,p]) ]
 >                     _ -> []
 
 
@@ -1195,9 +1193,8 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >
 > proofToExpr :: (Int -> Maybe Int) -> Proof -> Doc
 > proofToExpr lkp (By x ts ps) =
->   text "Using" <+> parens (text "Axiom" <+> text (show x)) <+>
->     smallList (map toExpr ts)
->     $$ nest 2 (bigList (map (proofToExpr lkp) ps))
+>   hang (text "Using" <+> text x <+> smallList (map toExpr ts)) 2
+>        (bigList (map (proofToExpr lkp) ps))
 > proofToExpr lkp (ByAsmp m) =
 >   case lkp m of
 >     Nothing -> text "new_proof"

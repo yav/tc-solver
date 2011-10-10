@@ -49,12 +49,31 @@ propArgs p = case getProp p of
 
 
 data Theorem  = AssumedFalse
-              | EqRefl
-              | EqSym
-              | EqTrans
+              | EqRefl      -- forall a. a = a
+              | EqSym       -- forall a b. (a = b) => b = a
+              | EqTrans     -- forall a b c. (a = b, b = c) => a = c
               | Cong Pred
-              | Sorry
-              | Axiom String
+              | AddLeq
+              | MulLeq
+              | ExpLeq1
+              | ExpLeq2
+              | DefAdd
+              | DefMul
+              | DefExp
+              | DefLeq
+              | LeqRefl
+              | LeqAsym
+              | LeqTrans
+              | Leq0 | Add0 | Mul0 | Mul1 | Root0 | Root1 | Log1
+              | AddComm | MulComm
+              | SubL | SubR | DivL | DivR | Root | Log
+              | AddAssoc | MulAssoc | AddMul | MulExp | ExpAdd | ExpMul
+              | AddAssocSym | MulAssocSym | AddMulSym
+              | MulExpSym | ExpAddSym | ExpMulSym
+              | FunAdd | FunMul | FunExp
+
+
+
 
 data Proof = ByAsmp EvVar
            | Using Theorem [Term] [Proof]   -- instantiation, sub-proof
@@ -63,17 +82,14 @@ data Proof = ByAsmp EvVar
 byRefl :: Term -> Proof
 byRefl t = Using EqRefl [t] []
 
-bySym :: Proof -> Proof
-bySym p = Using EqSym [] [p]
+bySym :: Term -> Term -> Proof -> Proof
+bySym t1 t2 p = Using EqSym [t1,t2] [p]
 
-byTrans :: Proof -> Proof -> Proof
-byTrans p1 p2 = Using EqTrans [] [p1,p2]
+byTrans :: Term -> Term -> Term -> Proof -> Proof -> Proof
+byTrans t1 t2 t3 p1 p2 = Using EqTrans [t1,t2,t3] [p1,p2]
 
 byCong :: Pred -> [Proof] -> Proof -> Proof
 byCong p qs q = Using (Cong p) [] (qs ++ [q])
-
-bySorry :: Proof
-bySorry = Using Sorry [] []
 
 byFalse :: Proof
 byFalse = Using AssumedFalse [] []
@@ -620,7 +636,8 @@ type Subst  = [ (Var,Term, Proof) ]
 
 compose :: Subst -> Subst -> Subst
 compose s2 s1 =
-  [ (x, t2, byTrans p1 p2) | (x,t,p1) <- s1, let (t2,p2) = apSubst s2 t ] ++
+  [ (x, t2, byTrans (Var x) t t2 p1 p2)
+                    | (x,t,p1) <- s1, let (t2,p2) = apSubst s2 t ] ++
   [ z | z@(x,_,_) <- s2, all (not . eqType x . fst3) s1 ]
   where fst3 (x,_,_) = x
 
@@ -646,8 +663,9 @@ impGoal :: Subst -> Goal -> TCN (Goal, Proof)
 impGoal su p
   | null su || propArgs p == ts  = return (p, ByAsmp (goalName p))
   | otherwise = do g <- newGoal (Prop (propPred p) ts)
-                   return (g, byCong (propPred p) (map bySym evs)
-                                                  (ByAsmp (goalName g)))
+                   return (g, byCong (propPred p)
+                                (zipWith3 bySym (propArgs p) ts evs)
+                                (ByAsmp (goalName g)))
   where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
 
 -- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
