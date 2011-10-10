@@ -186,7 +186,8 @@ parseProp n txt =
   dec (x : xs)           = (x:) `fmap` dec xs
 
 renderWI :: WorkItem -> String
-renderWI (Wanted w) = list [ show "Wanted", show (show (goalProp w)) ]
+renderWI (Wanted w) = list [ show "Wanted", ppp (goalName w) (goalProp w) ]
+  where ppp x y = show (x ++ ": " ++ show y)
 renderWI (Given  f) = list [ show "Given",  show (show (factProp f)) ]
 
 renderIS :: Maybe SolverS -> String
