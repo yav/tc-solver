@@ -105,7 +105,7 @@ byCong p _ qs q | all isRefl qs = q
         isRefl _ = False
 byCong Eq [x1,x2,y1,y2] [ xy1, xy2 ] xx =
                   byTrans y1 x2 y2 (byTrans y1 x1 x2 (bySym x1 y1 xy1) xx) xy2
-byCong p ts qs q = Using (Cong p) [] (qs ++ [q])
+byCong p ts qs q = Using (Cong p) ts (qs ++ [q])
 
 
 proofLet :: EvVar -> Proof -> Proof -> Proof
