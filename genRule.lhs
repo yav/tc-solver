@@ -36,8 +36,6 @@ Terms and Propositions
 >          | op `elem` [Eq,Leq]       = 2
 >          | otherwise                = error "bug: arity, unknown op"
 
-
-
 Utilities for easy input
 
 > instance Num Term where
@@ -76,6 +74,9 @@ Rules
 >                    , rProof :: Proof
 >                    }
 >
+> isSide :: Prop -> Bool
+> isSide  = all numV . fvs
+>
 > mkRule :: String -> [Prop] -> Prop -> Rule
 > mkRule name as r = ru
 >   where
@@ -87,19 +88,17 @@ Rules
 >     }
 >   (sides,asmps')  = partition isSide as
 >   asmps           = nub asmps'
->   isSide          = all numV . fvs
 >   vars            = map Var $ nub $ filter (not . numV) $ fvs (asmps,r)
->
 
 
 Keeping Track of Proofs
 
-> data Proof    = By String [Term] [Proof]
->               | ByAsmp !Int
+> data Proof    = By String [Term] [Proof]    -- Using an axiom
+>               | ByAsmp !Int                 -- Using an assumption
 >
 > instance FVS Proof where
 >   fvs p = case p of
->             By x ts ps -> fvs (ts,ps)
+>             By _ ts ps -> fvs (ts,ps)
 >             ByAsmp _   -> []
 >
 >   apSubst su p = case p of
@@ -143,9 +142,29 @@ See if some of the assumptions are redundant because they can be solved
 with one of the fixed rules that we already know.
 
 > normalize :: Rule -> Rule
-> normalize r = r {-case cutRule r =<< onlyBRules of
->                 [] -> r
->                 a : _ -> normalize a-}
+> normalize r0  = res {-
+>   trace "Normalizing:" $ trace (show (ppLongRule r0)) $
+>   trace "Result:" $ trace (show (ppLongRule res)) $ res -}
+>   where
+>   res = check 0 r0 id (rAsmps r0)
+>   check n r bs as =
+>     case as of
+>       [] -> r { rAsmps = bs [] }
+>       p : ps
+>        | isSide p  ->
+>          check n r { rSides = p : rSides r
+>                    , rProof = defAsmp (n, toProof p) (rProof r)
+>                    } bs ps
+>        | otherwise -> check (n+1) r ((p:) . bs) ps
+>
+>   toProof (Prop op _) =
+>     By (case op of
+>           Add -> "def-add"
+>           Mul -> "def-mul"
+>           Exp -> "def-exp"
+>           Leq -> "def-leq"
+>           Eq  -> error "Eq Asmp (this could be done by ref)"
+>        ) [] []
 
 
 
@@ -282,8 +301,8 @@ Commutativity
 >   where
 >   x : y : z : _ = srcOfVars V 0
 >   makeSym r = r : case r of
->                     RuleHL n as (Prop Eq [x,y])
->                       -> [ RuleHL (n ++ "-sym") as (Prop Eq [y,x]) ]
+>                     RuleHL n as (Prop Eq [p,q])
+>                       -> [ RuleHL (n ++ "-sym") as (Prop Eq [q,p]) ]
 >                     _ -> []
 
 
@@ -676,11 +695,12 @@ Showing
 
 > ppLongRule :: Rule -> Doc
 > ppLongRule r = case (rProof r, rAsmps r, rSides r) of
->                  (By x ts _,as,ss) | length as == length as ->
+>                  (By _ _ _,as,ss) ->
 >                     vcat (zipWith ppAsmp [0..] as) $$
 >                     vcat [ text "//" <+> pp s | s <- ss ] $$
 >                     text "-------------------------" $$
 >                     ppConc (rProof r) (rConc r)
+>                  (ByAsmp _, _, _) -> error "ppLongRule: ByAsmp"
 >   where pp x = text (show x)
 >         ppAsmp n v = int n <> char ':' <+> pp v
 >         ppConc p v = ppProof p $$ (text ":" <+> pp v)
@@ -1198,6 +1218,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >           $$ nest 2 (vsep (map bruleToAlt bs) $$ text "_ -> Nothing"))
 
 
+> main :: IO ()
 > main = main1
 
 > main1 :: IO ()
@@ -1305,9 +1326,6 @@ frule_Add_2_1_0_0_0 t1 t2 t3 =
 >   vars       = parens $ fsep $ punctuate comma
 >                       $ take (length pats) $ map (text . fruleVar) [ 0 .. ]
 >   pats       = map termToPat $ pArgs (snd $ fAdding r) ++ paramPats
->   getPats op = case M.lookup op (fPats r) of
->                  Nothing  -> []
->                  Just ts  -> concat $ map snd ts
 >
 >   (paramProofMap, paramPats)  = let (_, res) = mapAccumL doOp 1 fruleOrder
 >                                     (ms,ps)  = unzip res
