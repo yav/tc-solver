@@ -67,8 +67,8 @@ onConnect s (h,host,p) =
 
 
 --------------------------------------------------------------------------------
-data Cmd = AddC Int [WorkItem] | RmC Int deriving Show
-data WorkItem = Given Fact | Wanted Goal deriving Show
+data Cmd = AddC Int [WorkItem] | RmC Int
+data WorkItem = Given Fact | Wanted Goal
 
 data S = S { entered  :: M.Map Int [WorkItem]
            , inertSet :: Maybe SolverS
@@ -186,21 +186,28 @@ parseProp n txt =
   dec (x : xs)           = (x:) `fmap` dec xs
 
 renderWI :: WorkItem -> String
-renderWI (Wanted w) = list [ show "Wanted", ppp (goalName w) (goalProp w) ]
-  where ppp x y = show (x ++ ": " ++ show y)
-renderWI (Given  f) = list [ show "Given",  show (show (factProp f)) ]
+renderWI (Wanted w) = list [ str "Wanted", ppp (goalName w) (goalProp w) ]
+  where ppp x y = str (x ++ ": " ++ show (pp y))
+renderWI (Given  f) = list [str "Given",  str $ show $ pp $ factProp f ]
 
 renderIS :: Maybe SolverS -> String
-renderIS Nothing = list [ list [ show "Wanted", show "(inconsistent)" ]
-                        , list [ show "Given",  show "(inconsistent)" ]
+renderIS Nothing = list [ list [ str "Wanted", str "(inconsistent)" ]
+                        , list [ str "Given",  str "(inconsistent)" ]
                         ]
 renderIS (Just (xs,ps)) =
   list ( [ renderWI (Given g)  | g <- setToList (given xs)  ] ++
          [ renderWI (Wanted w) | w <- setToList (wanted xs) ] ++
          [ list [ show "Proof", show $ ppp p ] | p <- ps ]
        )
-  where ppp (x,y) = show (text x <+> text ":" <+> ppProof y)
+  where ppp (x,y) = show (text x <+> text ":" <+> pp y)
 
+
+type JSON = String
+
+str :: String -> JSON
+str x = show x
+
+list :: [JSON] -> JSON
 list xs = "[" ++ concat (intersperse "," xs) ++ "]"
 
 pEqn :: Int -> ReadP [Prop]

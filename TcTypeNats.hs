@@ -15,14 +15,18 @@ Terms and Propositions
 
 type Var  = Xi
 
--- | The 'Xi' in the 'Num' constructor stores the original 'Xi' type that
--- gave rise to the number. It is there in an attempt to preserve type synonyms.
+{- The 'Xi' in the 'Num' constructor stores the original 'Xi' type that
+gave rise to the number. It is there in an attempt to preserve type synonyms. -}
 data Term = Var Var
           | Num Integer (Maybe Xi)
             deriving (Eq,Ord)
 
+num :: Integer -> Term
+num n = Num n Nothing
+
+
 data Pred = Add | Mul | Exp | Leq | Eq
-            deriving (Eq, Ord)
+            deriving (Show, Eq, Ord)
 
 arity :: Pred -> Int
 arity pr =
@@ -34,6 +38,15 @@ arity pr =
     Eq  -> 2
 
 data Prop = Prop Pred [Term]
+
+wfProp :: Prop -> Bool
+wfProp (Prop p xs) = arity p == length xs
+
+
+{-------------------------------------------------------------------------------
+Goals and Facts
+-------------------------------------------------------------------------------}
+
 data Goal = Goal { goalName  :: EvVar, goalProp :: Prop }
 data Fact = Fact { factProof :: Proof, factProp :: Prop }
 
@@ -41,14 +54,9 @@ data Fact = Fact { factProof :: Proof, factProp :: Prop }
 class HasProp a where
   getProp :: a -> Prop
 
-instance HasProp Prop where
-  getProp = id
-
-instance HasProp Goal where
-  getProp = goalProp
-
-instance HasProp Fact where
-  getProp = factProp
+instance HasProp Prop where getProp = id
+instance HasProp Goal where getProp = goalProp
+instance HasProp Fact where getProp = factProp
 
 propPred :: HasProp a => a -> Pred
 propPred p = case getProp p of
@@ -58,6 +66,17 @@ propArgs :: HasProp a => a -> [Term]
 propArgs p = case getProp p of
                Prop _ xs -> xs
 
+
+{- The function 'goalToFact' is used when we attempt to solve a new goal
+in terms of already existing goals. -}
+goalToFact :: Goal -> Fact
+goalToFact g = Fact { factProof = ByAsmp (goalName g), factProp = goalProp g }
+
+
+
+{-------------------------------------------------------------------------------
+Proofs and Theorems
+-------------------------------------------------------------------------------}
 
 data Theorem  = AssumedFalse
               | EqRefl      -- forall a. a = a
@@ -84,12 +103,8 @@ data Theorem  = AssumedFalse
               | FunAdd | FunMul | FunExp
                 deriving Show
 
-
-
-
-data Proof = ByAsmp EvVar
-           | Using Theorem [Term] [Proof]   -- instantiation, sub-proof
-             deriving Show
+data Proof    = ByAsmp EvVar
+              | Using Theorem [Term] [Proof]   -- Instantiation, sub-proofs
 
 byRefl :: Term -> Proof
 byRefl t = Using EqRefl [t] []
@@ -109,7 +124,7 @@ byTrans t1 t2 t3 p1 p2 = Using EqTrans [t1,t2,t3] [p1,p2]
 
 -- (x1 = y1, x2 = y2, P x1 x2) => P y1 y2
 byCong :: Pred -> [Term] -> [Proof] -> Proof -> Proof
-byCong p _ qs q | all isRefl qs = q
+byCong _ _ qs q | all isRefl qs = q
   where isRefl (Using EqRefl _ _) = True
         isRefl _ = False
 -- (x1 == y1, x2 == y2, x1 == x2) => y1 = y2
@@ -141,56 +156,56 @@ proofLet x p1 (Using (Cong p) ts ss) = byCong p ts (init ss1) (last ss1)
   where ss1 = map (proofLet x p1) ss
 proofLet x p1 (Using t ts ps) = Using t ts (map (proofLet x p1) ps)
 
-
 byFalse :: Proof
 byFalse = Using AssumedFalse [] []
 
-ppProof :: Proof -> Doc
-ppProof pr =
-  case pr of
-    ByAsmp e -> text e
-    Using x ts ps -> text (show x) <> inst $$ nest 2 (vcat (map ppProof ps))
-      where inst = case ts of
-                     [] -> empty
-                     _  -> text "@" <> parens (fsep $ punctuate comma
-                                                    $ map (text . show) ts)
 
+{-------------------------------------------------------------------------------
+Pretty Printing
+-------------------------------------------------------------------------------}
 
--- | This is used when we want to try to solve a new goal, in terms
--- of already existing goals.
-goalToFact :: Goal -> Fact
-goalToFact g = Fact { factProof = ByAsmp (goalName g), factProp = goalProp g }
+class PP a where
+  pp :: a -> Doc
 
-num :: Integer -> Term
-num n = Num n Nothing
+instance PP Term where
+  pp (Var x)    = text x
+  pp (Num x _)  = integer x
 
-instance Show Term where
-  show (Var x)    = x
-  show (Num x _)  = show x
+instance PP Pred where
+  pp op =
+    case op of
+      Add -> text "+"
+      Mul -> text "*"
+      Exp -> text "^"
+      Leq -> text "<="
+      Eq  -> text "=="
 
-instance Show Pred where
-  show Add = "+"
-  show Mul = "*"
-  show Exp = "^"
-  show Leq = "<="
-  show Eq  = "=="
+instance PP Prop where
 
-instance Show Prop where
-
-  show (Prop op [t1,t2,t3])
+  pp (Prop op [t1,t2,t3])
     | op == Add || op == Mul || op == Exp =
-      show t1 ++ " " ++ show op ++ " " ++ show t2
-                                ++ " == " ++ show t3
-  show (Prop op [t1,t2])
-    | op == Leq || op == Eq = show t1 ++ " " ++ show op ++ " " ++ show t2
+      pp t1 <+> pp op <+> pp t2 <+> text "==" <+> pp t3
 
-  show (Prop op ts) = show op ++ " " ++ unwords (map show ts)
+  pp (Prop op [t1,t2])
+    | op == Leq || op == Eq = pp t1 <+> pp op <+> pp t2
 
-instance Show Fact where
-  show f = "G: " ++ show (factProp f)
+  pp (Prop op ts) = pp op <+> fsep (map pp ts)
 
-instance Show Goal where
-  show f = "W: " ++ show (goalProp f)
+
+instance PP Fact where
+  pp f = text "G:" <+> pp (factProp f)
+
+instance PP Goal where
+  pp f = text "W:" <+> pp (goalProp f)
+
+
+instance PP Proof where
+  pp (ByAsmp e) = text e
+  pp (Using x ts ps) = text (show x) <> inst $$ nest 2 (vcat (map pp ps))
+    where inst = case ts of
+                   [] -> empty
+                   _  -> text "@" <> parens (fsep $ punctuate comma $ map pp ts)
+
 
 {-------------------------------------------------------------------------------
 Collections of Entities with Propositions
@@ -296,9 +311,8 @@ unionPropSets ps1 ps2 = PropSet { given  = unionSet (given ps1) (given ps2)
                                 , wanted = unionSet (wanted ps1) (wanted ps2)
                                 }
 
-instance Show PropSet where
-  show is = "\n" ++ unlines (map show (setToList (given is)) ++
-                             map show (setToList (wanted is)))
+instance PP PropSet where
+  pp is = vcat (map pp (setToList (given is)) ++ map pp (setToList (wanted is)))
 
 
 {-------------------------------------------------------------------------------
@@ -587,10 +601,6 @@ if a set of assumptions (the first argument), entail a certain proposition
 
 
 entails :: Set Fact -> Goal -> TCN Answer
-
-entails ps p | tr "entails?:" (setToList ps)
-             $ trace "  --------"
-             $ trace ("  " ++ show p) False = undefined
 entails ps' p' =
   case closure ps' of
     Nothing -> return (YesIf emptySet byFalse) -- Assumed False. XXX: Could record proof
@@ -1043,11 +1053,11 @@ choose []     = []
 choose (x:xs) = (x,xs) : [ (y, x:ys) | (y,ys) <- choose xs ]
 
 -- | For debuging lists of things.
-tr :: Show a => String -> [a] -> b -> b
+tr :: PP a => String -> [a] -> b -> b
 tr x ys z = trace x (trace msg z)
   where msg = case ys of
                 [] -> "  (empty)"
-                _  -> unlines [ "  " ++ show y | y <- ys ]
+                _  -> show $ nest 2 $ vcat $ map pp ys
 
 
 
