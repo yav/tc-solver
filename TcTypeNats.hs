@@ -96,6 +96,20 @@ insertProps p (P props) = P (M.insertWith (++) (propPred p) [p] props)
 propsFromList :: HasProp a => [a] -> Props a
 propsFromList = foldr insertProps noProps
 
+{- Convert a list of propositions into a set, ignoring duplicates.
+We do this for facts because, usually, there is no need to have
+multiple proofs of the same thing.  This is in contrast to collections
+of goals where we might have to prove the same thing multiple times.
+
+NOTE: For the moment, this function just picks the first proof for
+a proposition.  An alternative would be to choose the best proof
+according to some metric. -}
+
+propsFromListNoDup :: [Fact] -> Props Fact
+propsFromListNoDup = P . M.fromListWith pick . map toElem
+  where toElem f   = (propPred f, [f])
+        pick _ old = old
+
 -- | Combine the propositions from two sets.
 unionProps :: Props a -> Props a -> Props a
 unionProps (P as) (P bs) = P (M.unionWith (++) as bs)
@@ -267,7 +281,6 @@ proofLet x p1 (Using t ts ps) = Using t ts (map (proofLet x p1) ps)
 
 byFalse :: Proof
 byFalse = Using AssumedFalse [] []
-
 
 {-------------------------------------------------------------------------------
 Results of Entailement
@@ -624,11 +637,11 @@ closure ps = closure1 =<< improvingSubst ps
 closure1 :: (Subst, Props Fact) -> Maybe (Subst, Props Fact)
 closure1 (su0, ps0) =
   do (su, ps) <- improvingSubst
-               $ propsFromList
+               $ propsFromListNoDup
                $ do (q,qs) <- chooseProp ps0
                     i      <- implied qs q
                     guard (isNothing (solve ps0 (factProp i)))
-                    ppTrace (text "Adding" <+> pp i) $ return i
+                    return i
 
      let su1 = compose su su0
          ps1 = filterProp (not . trivial . factProp) (impAsmps su ps0)
@@ -721,7 +734,7 @@ impAsmps su = fmap (impAsmp su)
 
 -- | Represent a substitution as a set of equations.
 substToEqns :: Subst -> Props Fact
-substToEqns su = propsFromList (map mk su)
+substToEqns su = propsFromListNoDup (map mk su)
   where mk (x,t,ev) = Fact { factProof = ev
                            , factProp  = Prop Eq [Var x, t]
                            }
