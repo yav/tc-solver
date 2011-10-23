@@ -1298,7 +1298,7 @@ frule_Add_2_1_0_0_0 t1 t2 t3 =
 
 > codeFRules :: M.Map Op (M.Map [(Op,Int)] [FRule]) -> Doc
 > codeFRules m =
->   text "implied :: Set Fact -> Fact -> [Fact]" $$
+>   text "implied :: Props Fact -> Fact -> [Fact]" $$
 >   text "implied" <+> fruleAsmpsName <+> text "newProp ="
 >     $$ nest 2 (text "let new_proof = factProof newProp in"
 >                 $$ text "case factProp newProp of" $$

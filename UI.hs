@@ -75,14 +75,14 @@ data S = S { entered  :: M.Map Int [WorkItem]
            }
 
 initS :: S
-initS = S { entered = M.empty, inertSet = Just (emptyPropSet, []) }
+initS = S { entered = M.empty, inertSet = Just (noSolverProps, []) }
 
 
 addWorkItemsUI :: (Int,[WorkItem]) -> SolverS -> Maybe SolverS
 addWorkItemsUI (n,ws) is = addWorkItems set is ('w' : show n) (length ws + 1)
-  where set = PropSet { wanted = setFromList [ w | Wanted w <- ws ]
-                      , given  = setFromList [ g | Given g  <- ws ]
-                      }
+  where set = SolverProps { wanted = propsFromList [ w | Wanted w <- ws ]
+                          , given  = propsFromList [ g | Given g  <- ws ]
+                          }
 
 processCmd :: Cmd -> S -> S
 processCmd cmd s =
@@ -92,7 +92,7 @@ processCmd cmd s =
                    }
     RmC x     -> S { entered   = ents
                    , inertSet  = foldM (flip addWorkItemsUI)
-                                       (emptyPropSet, [])
+                                       (noSolverProps, [])
                                        (M.toList ents)
                    }
       where ents = M.delete x (entered s)
@@ -195,8 +195,8 @@ renderIS Nothing = list [ list [ str "Wanted", str "(inconsistent)" ]
                         , list [ str "Given",  str "(inconsistent)" ]
                         ]
 renderIS (Just (xs,ps)) =
-  list ( [ renderWI (Given g)  | g <- setToList (given xs)  ] ++
-         [ renderWI (Wanted w) | w <- setToList (wanted xs) ] ++
+  list ( [ renderWI (Given g)  | g <- propsToList (given xs)  ] ++
+         [ renderWI (Wanted w) | w <- propsToList (wanted xs) ] ++
          [ list [ show "Proof", show $ ppp p ] | p <- ps ]
        )
   where ppp (x,y) = show (text x <+> text ":" <+> pp y)
