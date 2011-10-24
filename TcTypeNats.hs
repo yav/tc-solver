@@ -4,6 +4,7 @@ module TcTypeNats where
 import Control.Monad(foldM,guard,MonadPlus(..))
 import Debug.Trace
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Data.List(find)
 import Data.Maybe(isJust,isNothing)
 import Text.PrettyPrint
@@ -38,6 +39,7 @@ arity pr =
     Eq  -> 2
 
 data Prop = Prop Pred [Term]
+            deriving (Eq,Ord)
 
 wfProp :: Prop -> Bool
 wfProp (Prop p xs) = arity p == length xs
@@ -75,55 +77,39 @@ propositions with the same predicate constructor together.
 
 -- | We use a finite map that maps predicate constructors to the
 -- entities containing propositions with the corresponding constructor.
-newtype Props a = P (M.Map Pred [a])
-
-instance Functor Props where
-  fmap f (P m) = P (fmap (map f) m)
+newtype Props a = P (M.Map Pred (S.Set a))
 
 -- | Convert a set of propositions back into its list representation.
-propsToList :: Props a -> [a]
-propsToList (P ps) = concat (M.elems ps)
+propsToList :: Ord a => Props a -> [a]
+propsToList (P ps) = S.toList $ S.unions $ M.elems ps
 
 -- | An empty set of propositions.
 noProps :: Props a
 noProps = P M.empty
 
 -- | Add a proposition to an existing set.
-insertProps :: HasProp a => a -> Props a -> Props a
-insertProps p (P props) = P (M.insertWith (++) (propPred p) [p] props)
+insertProps :: (Ord a, HasProp a) => a -> Props a -> Props a
+insertProps p (P ps) = P (M.insertWith S.union (propPred p) (S.singleton p) ps)
 
 -- | Convert a list of propositions into a set.
-propsFromList :: HasProp a => [a] -> Props a
+propsFromList :: (Ord a, HasProp a) => [a] -> Props a
 propsFromList = foldr insertProps noProps
 
-{- Convert a list of propositions into a set, ignoring duplicates.
-We do this for facts because, usually, there is no need to have
-multiple proofs of the same thing.  This is in contrast to collections
-of goals where we might have to prove the same thing multiple times.
-
-NOTE: For the moment, this function just picks the first proof for
-a proposition.  An alternative would be to choose the best proof
-according to some metric. -}
-
-propsFromListNoDup :: [Fact] -> Props Fact
-propsFromListNoDup = P . M.fromListWith pick . map toElem
-  where toElem f   = (propPred f, [f])
-        pick _ old = old
-
 -- | Combine the propositions from two sets.
-unionProps :: Props a -> Props a -> Props a
-unionProps (P as) (P bs) = P (M.unionWith (++) as bs)
+unionProps :: Ord a => Props a -> Props a -> Props a
+unionProps (P as) (P bs) = P (M.unionWith S.union as bs)
 
 -- | Pick one of the propositions from a set
 -- and return the remaining propositions.
 -- Returns 'Nothing' if the set is empty.
 getOne :: Props a -> Maybe (a, Props a)
 getOne (P ps) =
-  do ((op,t:ts),qs) <- M.minViewWithKey ps
-     return (t, if null ts then P qs else P (M.insert op ts qs))
+  do ((op,terms),qs) <- M.minViewWithKey ps
+     (t,ts)          <- S.minView terms
+     return (t, if S.null ts then P qs else P (M.insert op ts qs))
 
 -- | Pick one of the propositions from a set in all possible ways.
-chooseProp :: HasProp a => Props a -> [(a,Props a)]
+chooseProp :: (Ord a, HasProp a) => Props a -> [(a,Props a)]
 chooseProp ps =
   case getOne ps of
     Nothing -> []
@@ -132,7 +118,7 @@ chooseProp ps =
 -- | Get the arguments of propositions constructed with a given
 -- predicate constructor.
 getPropsFor :: Pred -> Props a -> [a]
-getPropsFor op (P ps) = M.findWithDefault [] op ps
+getPropsFor op (P ps) = S.toList (M.findWithDefault S.empty op ps)
 
 getPropsForRaw :: Pred -> Props Fact -> [([Term],Proof)]
 getPropsForRaw p ps = [ (propArgs q, factProof q) | q <- getPropsFor p ps ]
@@ -142,12 +128,14 @@ getPropsForRaw p ps = [ (propArgs q, factProof q) | q <- getPropsFor p ps ]
 isEmptyProps :: Props a -> Bool
 isEmptyProps (P ps) = M.null ps
 
+mapProps :: (Ord a, Ord b) => (a -> b) -> Props a -> Props b
+mapProps f (P m) = P (fmap (S.map f) m)
+
 -- | Remove propositions that do not satisfy the given predicate.
-filterProp :: HasProp a => (a -> Bool) -> Props a -> Props a
-filterProp p (P ps) = P (M.mapMaybeWithKey upd ps)
-  where upd _ ts = case filter p ts of
-                      [] -> Nothing
-                      xs -> Just xs
+filterProps :: (Ord a, HasProp a) => (a -> Bool) -> Props a -> Props a
+filterProps p (P ps) = P (M.mapMaybeWithKey upd ps)
+  where upd _ ts = let xs = S.filter p ts
+                   in if S.null xs then Nothing else Just xs
 
 -- | Remove propositions with the given predicate constructor.
 rmPropsFor :: Pred -> Props a -> Props a
@@ -163,10 +151,24 @@ while {\em wanted} propositions correspond to goals that need to be proved.
 -------------------------------------------------------------------------------}
 
 data Goal = Goal { goalName  :: EvVar, goalProp :: Prop }
+            deriving (Eq,Ord)
+
 data Fact = Fact { factProof :: Proof, factProp :: Prop }
 
 instance HasProp Goal where getProp = goalProp
 instance HasProp Fact where getProp = factProp
+
+
+{- We compare facts only based on the property they state because we are
+not interested in facts that state the same thing but differ in the proof. -}
+
+instance Eq Fact where
+  x == y = factProp x == factProp y
+
+instance Ord Fact where
+  compare x y = compare (factProp x) (factProp y)
+
+
 
 {- The function 'goalToFact' is used when we attempt to solve a new goal
 in terms of already existing goals. -}
@@ -377,7 +379,7 @@ inert_prop props =
 
   where givens      = given props
         wanteds     = wanted props
-        assuming ws = unionProps (fmap goalToFact ws) givens
+        assuming ws = unionProps (mapProps goalToFact ws) givens
         noInteraction as b = (guard . isNotForAll) =<< entails as b
 
 {- The predicate consists of two parts, both of the same form:  the first one
@@ -531,7 +533,7 @@ between some existing goal, \Verb"w1", and the new goal \Verb"w".  The
 set \Verb"ws" has all existing goals without the goal under consideration. -}
 
   where
-  assuming ws = unionProps (fmap goalToFact ws) (given props)
+  assuming ws = unionProps (mapProps goalToFact ws) (given props)
 
   check (solved, new) (w1,ws) =
     do res <- entails (assuming (insertProps w ws)) w1
@@ -637,14 +639,14 @@ closure ps = closure1 =<< improvingSubst ps
 closure1 :: (Subst, Props Fact) -> Maybe (Subst, Props Fact)
 closure1 (su0, ps0) =
   do (su, ps) <- improvingSubst
-               $ propsFromListNoDup
+               $ propsFromList
                $ do (q,qs) <- chooseProp ps0
                     i      <- implied qs q
                     guard (isNothing (solve ps0 (factProp i)))
                     return i
 
      let su1 = compose su su0
-         ps1 = filterProp (not . trivial . factProp) (impAsmps su ps0)
+         ps1 = filterProps (not . trivial . factProp) (impAsmps su ps0)
 
      if isEmptyProps ps
        then tr "computed closure:" (propsToList ps1)
@@ -727,14 +729,14 @@ impAsmp su p = p { factProof = byCong (propPred p) (propArgs p ++ ts)
 
 
 impAsmps :: Subst -> Props Fact -> Props Fact
-impAsmps su = fmap (impAsmp su)
+impAsmps su = mapProps (impAsmp su)
 
 
 
 
 -- | Represent a substitution as a set of equations.
 substToEqns :: Subst -> Props Fact
-substToEqns su = propsFromListNoDup (map mk su)
+substToEqns su = propsFromList (map mk su)
   where mk (x,t,ev) = Fact { factProof = ev
                            , factProp  = Prop Eq [Var x, t]
                            }
@@ -750,7 +752,7 @@ substToEqns su = propsFromListNoDup (map mk su)
 -- substitutions in the 'Props' type.
 improvingSubst :: Props Fact -> Maybe (Subst, Props Fact)
 improvingSubst ps  = do su <- loop [] (getPropsFor Eq ps)
-                        return (su, filterProp (not . trivial . factProp)
+                        return (su, filterProps (not . trivial . factProp)
                                    $ impAsmps su $ rmPropsFor Eq ps)
   where
   loop su (eq : eqs) =
@@ -855,7 +857,7 @@ addWorkItemsM ps ss@(is,solns) =
   mkInert add r =
     let as = case dropWanted r of
                [] -> is
-               ns -> is { wanted = filterProp (keep ns) (wanted is) }
+               ns -> is { wanted = filterProps (keep ns) (wanted is) }
     in if consumed r then as else add as
   keep ns p = not (goalName p `elem` ns)
 
@@ -1065,7 +1067,7 @@ instance PP Proof where
                    [] -> empty
                    _  -> text "@" <> parens (fsep $ punctuate comma $ map pp ts)
 
-instance PP a => PP (Props a) where
+instance (Ord a, PP a) => PP (Props a) where
   pp = vcat . map pp . propsToList
 
 
