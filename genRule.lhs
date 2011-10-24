@@ -196,11 +196,19 @@ The rules
 >                            c <- commRules
 >                            cutRule r c
 
+> specAx :: [Rule] -> [Rule]
+> specAx rs = rs ++ filter (not . trivialRule)
+>                      (do r <- rs
+>                          c <- axiomSchemas
+>                          cutRule r c)
+
 > specSimple :: [Rule] -> [Rule]
 > specSimple rs = rs ++ filter (not . trivialRule)
 >                      (do r <- rs
->                          c <- axiomSchemas ++ simpleRules
+>                          c <- simpleRules
 >                          cutRule r c)
+
+
 
 > srcOfVars :: (String -> Var) -> Integer -> [Term]
 > srcOfVars mk from = do v <- [ from :: Integer .. ]
@@ -211,7 +219,7 @@ The rules
 
 > leqRules :: [Rule]
 > leqRules = foldr addRule []
->          $ specSimple
+>          $ specAx
 >          $ commuteAsmps
 >          $ map toSimpleRule
 >          [ aRule "AddLeq"   [ x  +  y === z          ] (x <== z)
@@ -264,8 +272,10 @@ Commutativity
 > asmpRules :: [ Rule ]
 > asmpRules =
 >     foldr addRule [] $
->     specSimple $
->     funs ++
+>     specAx $
+>     specSimple (funs ++ map toSimpleRule (
+>                   [ aRule "LeqAsym"  [ x <== y, y <== x ] (x === y)
+>                   ])) ++
 >     map toSimpleRule (
 >     [ aRule "SubL"     [ x1  +  y  === x2  +  y           ] (x1 === x2)
 >     , aRule "SubR"     [ x   + y1  === x   +  y2          ] (y1 === y2)
@@ -273,7 +283,6 @@ Commutativity
 >     , aRule "DivR"     [ x   * y1  === x   *  y2, 1 <== x ] (y1 === y2)
 >     , aRule "Root"     [ x1 ^^^ y  === x2 ^^^ y,  1 <== y ] (x1 === x2)
 >     , aRule "Log"      [ x  ^^^ y1 === x  ^^^ y2, 2 <== x ] (y1 === y2)
->     , aRule "LeqAsym"  [ x <== y, y <== x ]                 (x === y)
 >     , aRule "LeqTrans" [ x <== y, y <== z ]                 (x <== z)
 >     ]
 >     )
@@ -288,10 +297,9 @@ Commutativity
 
 
 
-
 > notSymRules :: [Rule]
 > notSymRules = foldr addRule []
->             $ specSimple
+>             $ specAx
 >             $ map toSimpleRule
 >             $ concatMap makeSym
 >
