@@ -158,7 +158,9 @@ with one of the fixed rules that we already know.
 >       [] -> r { rAsmps = bs [] }
 >       p : ps
 >        | isSide p  ->
->          check n r { rSides = p : rSides r
+>          check n r { rSides = case evalSide p of
+>                                 Just True -> rSides r
+>                                 _         -> p : rSides r
 >                    , rProof = defAsmp (n, toProof p) (rProof r)
 >                    } bs ps
 >        | otherwise -> check (n+1) r ((p:) . bs) ps
