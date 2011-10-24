@@ -998,7 +998,7 @@ minus :: Integer -> Integer -> Maybe Integer
 minus x y = if x >= y then Just (x - y) else Nothing
 
 descreteRoot :: Integer -> Integer -> Maybe Integer
-descreteRoot root x0 = search 0 x0
+descreteRoot x0 root = search 0 x0
   where
   search from to = let x = from + div (to - from) 2
                        a = x ^ root
@@ -1009,10 +1009,10 @@ descreteRoot root x0 = search 0 x0
                         _               -> Nothing
 
 descreteLog :: Integer -> Integer -> Maybe Integer
-descreteLog _    0   = Just 0
-descreteLog base x0 | base == x0  = Just 1
-descreteLog base x0 = case divMod x0 base of
-                         (x,0) -> fmap (1+) (descreteLog base x)
+descreteLog 0  _  = Just 0
+descreteLog x0 base | base == x0  = Just 1
+descreteLog x0 base = case divMod x0 base of
+                         (x,0) -> fmap (1+) (descreteLog x base)
                          _     -> Nothing
 
 divide :: Integer -> Integer -> Maybe Integer
