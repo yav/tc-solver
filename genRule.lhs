@@ -1118,7 +1118,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 
 
 > solverRules :: ([FRule], [BRule])
-> solverRules = ( concat (map mkFRule onlyFRules)
+> solverRules = ( filter (not . useless) $ concat (map mkFRule onlyFRules)
 >               , concat (map mkBRule onlyBRules)
 >               )
 >   where
@@ -1127,6 +1127,15 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >
 >   forFRule f es = f { fBoringGs = map GBool es }
 >   forBRule f es = f { bBoringGs = map GBool es }
+>
+>   useless = any obvious . map snd . propsToList . fPats
+>   -- We don't need frules with such assumptions because
+>   -- these are going to lead to improvement, w
+>   obvious prop = case prop of
+>                    Prop Add [ _, Const 0, _ ] -> True
+>                    Prop Mul [ _, Const 0, _ ] -> True
+>                    Prop Mul [ _, Const 1, _ ] -> True
+>                    _ -> False
 
 
 
