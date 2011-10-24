@@ -222,10 +222,10 @@ The rules
 >          $ specAx
 >          $ commuteAsmps
 >          $ map toSimpleRule
->          [ aRule "AddLeq"   [ x  +  y === z          ] (x <== z)
->          , aRule "MulLeq"   [ x  *  y === z, 1 <== y ] (x <== z)
->          , aRule "ExpLeq1"  [ x ^^^ y === z, 1 <== y ] (x <== z)
->          , aRule "ExpLeq2"  [ x ^^^ y === z, 2 <== x ] (y <== z)
+>          [ aRule "AddLeq"   []          (x <== x + y)
+>          , aRule "MulLeq"   [ 1 <== y ] (x <== x * y)
+>          , aRule "ExpLeq1"  [ 1 <== y ] (x <== x ^^^ y)
+>          , aRule "ExpLeq2"  [ 2 <== x ] (y <== x ^^^ y)
 >          ]
 >   where
 >   x : y : z : _ = srcOfVars V 0
@@ -294,7 +294,6 @@ Commutativity
 >                    [Prop op [x,y,z1], Prop op [x,y,z2]]
 >                    (Prop Eq [z1,z2])
 >
-
 
 
 > notSymRules :: [Rule]
