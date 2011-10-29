@@ -488,7 +488,7 @@ set unchanged.
 
 addWanted w props =
 
-  do res <- entails (assuming (wanted props)) w
+  do res <- entails (assumeGoals (wanted props) (given props)) w
      case res of
 
 {- The first two cases---when there is interaction---are the same as for
@@ -510,16 +510,16 @@ between the new goal and the existing inert set.  In this case we
 add the new goal to the inert set but, in addition, we need to check
 if it is possible to solve any of the already existing goals in terms
 of the new goal.  We cannot simply add the existing goals back on the
-work queue (as we did when we added an assumption) because this may
-lead to a non-terminating loop:  any two goals that cannot be solved in terms
+work queue because this may lead to a non-terminating loop:
+any two goals that cannot be solved in terms
 of each other are going to keep restarting each other forever.  Instead,
 we examine the existing goals one at a time and check for interactions in
 the presence of the new goal, removing goals that are entailed, and leaving
 goals that result in no interaction in the inert set. -}
 
       NotForAll ->
-        do let start = ([],noProps)
-           (solved,new) <- foldM check start (chooseProp (wanted props))
+        do let asmps0 = insertProps (goalToFact w) (given props)
+           (solved,new) <- checkExisting [] noProps asmps0 (wanted props)
 
            return PassResult
              { dropWanted   = map fst solved
@@ -528,32 +528,53 @@ goals that result in no interaction in the inert set. -}
              , consumed     = False
              }
 
-{- The function \Verb"check" has the details of how to check for interaction
-between some existing goal, \Verb"w1", and the new goal \Verb"w".  The
-set \Verb"ws" has all existing goals without the goal under consideration. -}
-
   where
-  assuming ws = unionProps (mapProps goalToFact ws) (given props)
+  assumeGoals as bs = unionProps (mapProps goalToFact as) bs
 
-  check (solved, new) (w1,ws) =
-    do res <- entails (assuming (insertProps w ws)) w1
-       case res of
-         NotForAny      -> mzero
-         NotForAll      -> return (solved, new)
-         YesIf ps proof -> return ( (goalName w1, proof) : solved
-                                  , unionProps ps new
-                                  )
+{- The function 'checkExisting' has the details of how to check for interaction
+between some existing goal, 'w'", and the new goal 'w'.  The function uses
+four pieces of state:
+
+  * 'solved' is a list which accumulates existing goals that were solved,
+
+  * 'new' is a collection of newly generated goals---these may arise when
+    we solve an existing goal, but the proof needs some new sub-goals,
+
+  * 'asmps' is the collection of facts that we know about---this is a mixture
+    of the original facts and goals that we tried to solve but failed,
+
+  * 'ws' is a collection of goals that we still need to examine.
+-}
+
+  checkExisting solved new asmps ws =
+    case getOne ws of
+      Nothing -> return (solved, new)
+      Just (w1,ws1) ->
+        do res <- entails (assumeGoals ws1 asmps) w1
+           case res of
+             NotForAny -> mzero
+             NotForAll ->
+               checkExisting solved
+                             new
+                             (insertProps (goalToFact w1) asmps)
+                             ws1
+             YesIf ps proof ->
+               checkExisting ((goalName w1, proof) : solved)
+                             (unionProps ps new)
+                             (assumeGoals ps asmps)
+                             ws1
+
 
 
 {- To see the algorithm in action, consider the following example:
 
 New goal:   2 <= x
-Inert set:  { wanted = [1 <= x, x + 5 = y] }
+Inert set:  { wanted = [x + 5 = y, 1 <= x] }
 
-Step 1: entails [1 <= x, x + 5 = y] (2 <= x)      -->  NotForAll
+Step 1: entails [x + 5 = y, 1 <= x] (2 <= x)      -->  NotForAll
 Step 2: Add (2 <= x) to the inert set and examine existing goals:
-  Step 2.1: entails [2 <= x, x + 5 = y] (1 <= x)  --> YesIf []  // remove
   Step 2.2: entails [2 <= x, 1 <= x] (x + 5 = y)  --> NotForAll // keep
+  Step 2.1: entails [2 <= x, x + 5 = y] (1 <= x)  --> YesIf []  // remove
 
 New inert set: { wanted = [2 <= x, x + 5 = y] }
 
