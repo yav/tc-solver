@@ -654,6 +654,25 @@ entails ps' p' =
                                     $ proofLet (goalName p1) proof
                                     $ proofLet (goalName p)  p_su2 p_su
 
+
+addFact :: Fact -> Props Fact -> Maybe (Props Fact, Props Fact)
+addFact fact0 cur_known0 =
+  do (su, cur_known) <- improvingSubst cur_known0
+     let fact = impAsmp su fact0
+     case solve cur_known (factProp fact) of
+       Just _  -> return (cur_known0, noProps)
+
+       -- NOTE: We don't keep the set of known facts "minimal".
+       -- If we wanted to do this, we'd have to remove any existing facts
+       -- that can be solved in terms of the new fact.
+       Nothing -> return ( insertProps fact cur_known0
+                         , propsFromList (implied cur_known fact)
+                         )
+
+
+
+
+
 closure :: Props Fact -> Maybe (Subst, Props Fact)
 closure ps = closure1 =<< improvingSubst ps
 
