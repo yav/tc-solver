@@ -6,7 +6,6 @@ import Debug.Trace
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.List(find)
-import Data.Maybe(isJust,isNothing)
 import Text.PrettyPrint
 import Data.List(zipWith5)
 
@@ -159,7 +158,7 @@ instance HasProp Goal where getProp = goalProp
 instance HasProp Fact where getProp = factProp
 
 
-{- We compare facts only based on the property they state because we are
+{- We compare facts based only on the property they state because we are
 not interested in facts that state the same thing but differ in the proof. -}
 
 instance Eq Fact where
@@ -168,34 +167,111 @@ instance Eq Fact where
 instance Ord Fact where
   compare x y = compare (factProp x) (factProp y)
 
-
-
 {- The function 'goalToFact' is used when we attempt to solve a new goal
 in terms of already existing goals. -}
 goalToFact :: Goal -> Fact
 goalToFact g = Fact { factProof = ByAsmp (goalName g), factProp = goalProp g }
 
 
+
+--------------------------------------------------------------------------------
+
+{- A collection of facts. Equalities are normalized to form a substitution,
+and we inforce the invariant that this substitution is always applied to
+the remaining facts. -}
+
+data Facts = Facts { facts    :: Props Fact -- Excluding equality
+                   , factsEq  :: Subst      -- Normalized equalities
+                   }
+
+factsToList :: Facts -> [Fact]
+factsToList fs = map toEqn (factsEq fs) ++ propsToList (facts fs)
+  where toEqn (x,t,p) = Fact { factProof = p, factProp = Prop Eq [Var x,t] }
+
+noFacts :: Facts
+noFacts = Facts { facts = noProps, factsEq = [] }
+
+insertFact :: Fact -> Facts -> Maybe Facts
+insertFact f fs = insertImpFact (impFact (factsEq fs) f) fs
+
+
+{- NOTE: This function assumes that the substition from the facts has
+already been applied to the new fact.  It can be used as an optimization to
+avoid applying the substitution twice. -}
+
+insertImpFact :: Fact -> Facts -> Maybe Facts
+insertImpFact f fs =
+  case factProp f of
+    Prop Eq [s,t] ->
+      do su <- mgu (factProof f) s t
+         return Facts { facts   = mapProps (impFact su) (facts fs)
+                      , factsEq = compose su (factsEq fs)
+                      }
+    _ -> return fs { facts = insertProps f (facts fs) }
+
+
+{- 'addFact' is simillar to 'insertFact' but ith returns a bit more detail
+about what happened.  In particular, if the fact is actually to be added
+to the collection, we also compute a set of additional facts that follow
+from combining the existing facts with the new one. -}
+
+data AddFact = Inconsistent
+             | AlreadyKnown
+             | Improved Fact
+             | Added [Fact] Facts     -- additional facts, new set
+
+addFact :: Fact -> Facts -> AddFact
+addFact fact0 cur_known =
+  let fact = impFact (factsEq cur_known) fact0
+  in if fact /= fact0
+        then Improved fact
+        else case solve (facts cur_known) (factProp fact) of
+               Just _ -> AlreadyKnown
+
+{- NOTE: We don't keep the set of known facts as "minimal".
+If we wanted to do this, we'd have to remove existing facts that
+can be solved in terms of the new fact. -}
+
+               Nothing ->
+                 case insertImpFact fact cur_known of
+                   Just ok -> Added (implied (facts cur_known) fact) ok
+                   Nothing -> Inconsistent
+
+
+{- Add a fact and all the facts that follow from it.  The arguments are
+ordered like this so that the function can be used conveniently with 'foldM'. -}
+
+addFactTrans :: Facts -> Fact -> Maybe Facts
+addFactTrans facts0  fact =
+  case addFact fact facts0 of
+    Inconsistent    -> mzero
+    AlreadyKnown    -> return facts0
+    Improved fact1  -> addFactTrans  facts0 fact1
+    Added fs facts1 -> addFactsTrans facts1 fs
+
+
+{- Add a collection of facts and all the facts that follow from them. -}
+
+addFactsTrans :: Facts -> [Fact] -> Maybe Facts
+addFactsTrans = foldM addFactTrans
+
+
+--------------------------------------------------------------------------------
+
 {- A part of the solver's state keeps track of the current set of known facts,
 and the goals that still need to be solved. -}
 
-data SolverProps = SolverProps { given :: Props Fact, wanted :: Props Goal }
+data SolverProps = SolverProps { given :: Facts, wanted :: Props Goal }
 
 noSolverProps :: SolverProps
-noSolverProps = SolverProps { given = noProps, wanted = noProps }
+noSolverProps = SolverProps { given = noFacts, wanted = noProps }
 
-insertGiven :: Fact -> SolverProps -> SolverProps
-insertGiven g ps = ps { given = insertProps g (given ps) }
+insertGiven :: Fact -> SolverProps -> Maybe SolverProps
+insertGiven g ps = do gs <- insertFact g (given ps)
+                      return ps { given = gs }
 
 insertWanted :: Goal -> SolverProps -> SolverProps
 insertWanted w ps = ps { wanted = insertProps w (wanted ps) }
-
-unionSolverProps :: SolverProps -> SolverProps -> SolverProps
-unionSolverProps ps1 ps2 = SolverProps
-                             { given  = unionProps (given ps1) (given ps2)
-                             , wanted = unionProps (wanted ps1) (wanted ps2)
-                             }
-
 
 
 
@@ -291,7 +367,7 @@ Results of Entailement
 {- | The entailment function may return one of three possible answers,
 informally corresponding to ``certainly not'', ''not in its current form'',
 and ''(a qualified) yes''. -}
-data Answer = NotForAny | NotForAll | YesIf (Props Goal) Proof
+data Answer = NotForAny | NotForAll | YesIf [Goal] Proof
 
 isNotForAny :: Answer -> Bool
 isNotForAny NotForAny = True
@@ -370,6 +446,7 @@ the propositions in it cannot ``interact'' with each other.
 -- we use a separate type synonym.
 type InertProps = SolverProps
 
+{-
 -- | More formally, the following predicate captures the ``non-interacion''
 -- invariant of the inert set:
 inert_prop :: InertProps -> TCN ()
@@ -381,6 +458,7 @@ inert_prop props =
         wanteds     = wanted props
         assuming ws = unionProps (mapProps goalToFact ws) givens
         noInteraction as b = (guard . isNotForAll) =<< entails as b
+-}
 
 {- The predicate consists of two parts, both of the same form:  the first one
 asserts that the collection of given facts is consistent and non-redundant,
@@ -398,11 +476,18 @@ element from a collection in all possible ways.  -}
 addGiven  :: Fact -> InertProps -> TCN PassResult
 addWanted :: Goal -> InertProps -> TCN PassResult
 
-data PassResult = PassResult { dropWanted   :: [EvVar]
-                             , solvedWanted :: [(EvVar,Proof)]
-                             , newWork      :: SolverProps
+data PassResult = PassResult { solvedWanted :: [(EvVar,Proof)]
+                             , newGoals     :: [Goal]
+                             , newFacts     :: [Fact]
                              , consumed     :: Bool
                              }
+
+noChanges :: PassResult
+noChanges = PassResult { solvedWanted = []
+                       , newGoals     = []
+                       , newFacts     = []
+                       , consumed     = False
+                       }
 
 
 
@@ -413,65 +498,30 @@ When we add a new assumption to an inert set we check for ``interactions''
 with the existing assumptions by using the entailment function.
 -------------------------------------------------------------------------------}
 
--- NOTE: Since we recompute the closure of the givens all the
--- time, we could simply add all the known facts, and not worry about
--- interactions...
-
--- XXX: We should probably just cache the closure
 addGiven g props =
-  case solve (given props) (factProp g) of
-    Just _ -> return PassResult
-                { dropWanted = []
-                , solvedWanted = []
-                , newWork = noSolverProps
-                , consumed = True
-                }
-    _ -> case closure (insertProps g (given props)) of
-           Nothing -> mzero
-           Just _ -> return PassResult
-             { dropWanted    = map goalName (propsToList (wanted props))
-             , solvedWanted  = []
-             , newWork       = props { given = noProps }
-             , consumed      = False
-             }
+  case addFact g (given props) of
 
+    Inconsistent  -> mzero
+    AlreadyKnown  -> return noChanges { consumed = True }
+    Improved fact -> return noChanges { consumed = True, newFacts = [fact] }
 
-{-
+{- We don't add the new fact to the inerts yet because, in the context of GHC,
+there might be another pass that might want to have a go at the goal.
 
-  case entails (given props) (factProp g) of
-
-{- The first possibility is that the new assumption is incompatible with
-the existing assumptions, in which case we simply report an error
-and ignore the new fact. -}
-
-    NotForAny -> mzero
-
-{- Another possible outcome is that---in its current form---the proposition
-is already entailed by the currently known assumptions.  Then, we leave
-the inert set unmodified but we record the alternative formulation (if any)
-as new work to be processed by the solver. -}
-
-    YesIf ps _ -> return PassResult
-      { dropWanted    = []
-      , solvedWanted  = []
-      , newWork       = undefined -- emptySolverProps { given = ps } -- XXX: type error
-      , newGoals      = noProps
-      , consumed      = True
-      }
-
-{- Finally, if entailment yielded no interaction, then we add the new fact to
-the inert set.  Any goals that were in the inert set are removed and added
-back to the work queue so that we can re-process them in the context of the
-new assumption. -}
-
-    NotForAll -> return PassResult
-      { dropWanted    = map goalName (propsToList (wanted props))
-      , solvedWanted  = []
-      , newWork       = props { given = noProps }
-      , newGoals      = noProps
-      , consumed      = False
-      }
+When a new fact is added to the system, we need to restart any existing
+goal, because they might be solvable using the new fact.  Currently,
+this is done in our top level solver, when it encounters a non-consumed
+given.  It is important to make sure that GHC does the same.  If
+not, we can simulate the same behavior when we translate from this
+representation to GHC's.
 -}
+
+    Added new _ -> return
+      PassResult { newGoals      = []
+                 , newFacts      = new
+                 , solvedWanted  = []
+                 , consumed      = False
+                 }
 
 
 {-------------------------------------------------------------------------------
@@ -488,22 +538,23 @@ set unchanged.
 
 addWanted w props =
 
-  do res <- entails (assumeGoals (wanted props) (given props)) w
-     case res of
+     do asmps <- assumeGoals wantedList (given props)
+        res <- entails asmps w
+        case res of
 
 {- The first two cases---when there is interaction---are the same as for
 adding an assumption:  inconsistencies result in an error, while solving
 the new goal does not affect the inert set but may add a new formulation
 of the goal to the work queue. -}
 
-      NotForAny -> mzero
+          NotForAny -> mzero
 
-      YesIf ps proof -> return PassResult
-        { dropWanted    = []
-        , solvedWanted  = [ (goalName w, proof) ]
-        , newWork       = noSolverProps { wanted = ps }
-        , consumed      = True
-        }
+          YesIf ps proof -> return PassResult
+            { solvedWanted  = [ (goalName w, proof) ]
+            , newGoals      = ps
+            , newFacts      = []
+            , consumed      = True
+            }
 
 {- The major difference in the algorithm is when there is no interaction
 between the new goal and the existing inert set.  In this case we
@@ -517,22 +568,23 @@ we examine the existing goals one at a time and check for interactions in
 the presence of the new goal, removing goals that are entailed, and leaving
 goals that result in no interaction in the inert set. -}
 
-      NotForAll ->
-        do let asmps0 = insertProps (goalToFact w) (given props)
-           (solved,new) <- checkExisting [] noProps asmps0 (wanted props)
+          NotForAll ->
+                do asmps0 <- assumeGoals [w] (given props)
+                   (solved,new) <- checkExisting [] [] asmps0 wantedList
 
-           return PassResult
-             { dropWanted   = map fst solved
-             , solvedWanted = solved
-             , newWork      = noSolverProps { wanted = new }
-             , consumed     = False
-             }
+                   return PassResult
+                     { solvedWanted = solved
+                     , newGoals     = new
+                     , newFacts     = []
+                     , consumed     = False
+                     }
 
   where
-  assumeGoals as bs = unionProps (mapProps goalToFact as) bs
+  wantedList        = propsToList (wanted props)
+  assumeGoals as bs = liftMb $ addFactsTrans bs $ map goalToFact as
 
 {- The function 'checkExisting' has the details of how to check for interaction
-between some existing goal, 'w'", and the new goal 'w'.  The function uses
+between some existing goal, 'w1', and the new goal 'w'.  The function uses
 four pieces of state:
 
   * 'solved' is a list which accumulates existing goals that were solved,
@@ -547,22 +599,22 @@ four pieces of state:
 -}
 
   checkExisting solved new asmps ws =
-    case getOne ws of
-      Nothing -> return (solved, new)
-      Just (w1,ws1) ->
-        do res <- entails (assumeGoals ws1 asmps) w1
+    case ws of
+      [] -> return (solved, new)
+      w1 : ws1 ->
+        do asmps1 <- assumeGoals ws1 asmps
+           res <- entails asmps1 w1
            case res of
              NotForAny -> mzero
              NotForAll ->
-               checkExisting solved
-                             new
-                             (insertProps (goalToFact w1) asmps)
-                             ws1
+               do asmps2 <- assumeGoals [w1] asmps
+                  checkExisting solved new asmps2 ws1
              YesIf ps proof ->
-               checkExisting ((goalName w1, proof) : solved)
-                             (unionProps ps new)
-                             (assumeGoals ps asmps)
-                             ws1
+               do asmps2 <- assumeGoals ps asmps
+                  checkExisting ((goalName w1, proof) : solved)
+                                (ps ++ new)
+                                asmps2
+                                ws1
 
 
 
@@ -593,131 +645,143 @@ if a set of assumptions (the first argument), entail a certain proposition
 
 
 
-entails :: Props Fact -> Goal -> TCN Answer
+entails :: Facts -> Goal -> TCN Answer
+
+-- For debugging.
 entails ps p | gTrace msg = undefined
-  where msg = text "Entails?" $$ nest 2 (vcat (map pp (propsToList ps))
+  where msg = text "Entails?" $$ nest 2 (vcat (map pp (propsToList (facts ps)))
                                       $$ text "-----------------"
                                       $$ pp p
                                         )
 
+entails ps p' =
+  do (p,p_su) <- impGoal (factsEq ps) p'
+     case solve (facts ps) (goalProp p) of
 
-entails ps' p' =
-  case closure ps' of
-    Nothing -> return (YesIf noProps byFalse) -- Assumed False. XXX: Could record proof
-    Just (su,ps) ->
-      do (p,p_su) <- impGoal su p'
-         case solve ps (goalProp p) of
+       Just proof ->
+         return (YesIf [] $ proofLet (goalName p) proof p_su)
 
-           Just proof ->
-             return (YesIf noProps $ proofLet (goalName p) proof p_su)
+       Nothing ->
 
-           Nothing ->
+{- This is what we do if nothing else works: if we managed to improve the
+goal using the existing equalities, then we solve the original and continue
+with the new goal.  Otherwise, we report that we don't know how to solve it. -}
 
-            -- This is what we'll do if the additional improvements fail.
-            let noLuck = return $ if goalName p == goalName p'
-                                    then NotForAll
-                                    else YesIf (insertProps p noProps) p_su
+         let noLuck = return (if goalName p == goalName p'
+                                 then NotForAll
+                                 else YesIf [p] p_su)
+         in
 
-            in -- Try improvement
-            case closure (insertProps (goalToFact p) ps) of
-              Nothing -> return NotForAny
-              Just (su1,_) ->
-                case goalProp p' of
-                  Prop Eq [Var x, t]
-                    -- Do the "better" goals contain original?
-                    | any (\(x',t',_) -> x == x' && t == t') su1 -> noLuck
+{- Before giving up, however, we try improvement proper.  This means that we
+need to find a logically equivalent set of goals that might lead to progress.
 
-                  _ -> -- No?  So, then there's still hope.
+The new goals needs to imply the original to preserve soundness (i.e.,
+we don't just loose goals).  Also, the original goal needs to imply the new
+set to preserve completeness (i.e., we don't make the program harder and so
+reject valid programs).
 
-                       -- First, we replace the fake facts by goals.
-                    do let fixup (x,t,_) =
-                              do g <- newGoal (Prop Eq [Var x, t])
-                                 return (g, (x,t,ByAsmp (goalName g)))
+The improvement process starts by adding the goal as a new assumption
+to the existing set of facts, then computing what new facts follow from this.
+These new facts are candiadtes for replacing the goal because they satisfy
+the completenss side of the double implication.  The proofs of these facts
+are discarded because they use the original goal as an assumption---we are
+interested only in the computed propositions.
 
-                       (eqns,su2) <- unzip `fmap` mapM fixup su1
+Next, we filter out propositions that are cosidered to be more complex than
+the current goal, according to some metric.  At present, we consider
+only new equality constraints so, essentially, we are computing an improving
+substitution.  This provides goals that, potentially, could be of interest
+to other passes of GHC's constraint solver.
 
-                       let -- Make some new facts, using existing facts
-                           -- and the new equality assumptions.
-                           ps1 = impAsmps su2 ps
+Finally, we check if we can solve the original goal by using the new
+proposiitons as assumptions, and if so we have found an improving
+substitution.
+-}
 
-                           -- Make a new (better) goal,
-                           -- using the equality assumptions
-                           -- p_su2:  p <=> p1
-                       (p1,p_su2) <- impGoal su2 p
+         case addFactsTrans ps [goalToFact p] of
 
-                       case solve ps1 (goalProp p1) of
-                         Nothing -> noLuck  -- Aw, nothing works!
+           -- The new goal contradicts the given assumptions.
+           Nothing -> return NotForAny
 
-                         -- It worked!
-                         Just proof ->
-                             return $ YesIf (propsFromList eqns)
-                                    $ proofLet (goalName p1) proof
-                                    $ proofLet (goalName p)  p_su2 p_su
+           -- New facts!  We consider only the equalities.
+           Just (Facts { factsEq = su1 }) ->
 
+             case goalProp p' of
 
-addFact :: Fact -> Props Fact -> Maybe (Props Fact, Props Fact)
-addFact fact0 cur_known0 =
-  do (su, cur_known) <- improvingSubst cur_known0
-     let fact = impAsmp su fact0
-     case solve cur_known (factProp fact) of
-       Just _  -> return (cur_known0, noProps)
+{- Make sure that the new equalities do not contain the original
+goal, otherwise we would not be making any progress. -}
 
-       -- NOTE: We don't keep the set of known facts "minimal".
-       -- If we wanted to do this, we'd have to remove any existing facts
-       -- that can be solved in terms of the new fact.
-       Nothing -> return ( insertProps fact cur_known0
-                         , propsFromList (implied cur_known fact)
-                         )
+               Prop Eq [Var x, t]
+                 | any (\(x',t',_) -> x == x' && t == t') su1 -> noLuck
 
+               _ ->
 
+{- At this point we have a candidate for improvement.
+Now we need to check if the new facts can help to solve the original goal.
 
+The first thing to do is replace the proof of the computed fact with
+fresh assumption.  Remember that these proofs were constructed by assuming
+the original goal, so they are no good for the reversed implication.
+-}
 
+                 do let fixup (x,t,_) =
+                           do g <- newGoal (Prop Eq [Var x, t])
+                              return (g, (x,t,ByAsmp (goalName g)))
 
-closure :: Props Fact -> Maybe (Subst, Props Fact)
-closure ps = closure1 =<< improvingSubst ps
+                    (eqns,su2) <- unzip `fmap` mapM fixup su1
 
-closure1 :: (Subst, Props Fact) -> Maybe (Subst, Props Fact)
-closure1 (su0, ps0) =
-  do (su, ps) <- improvingSubst
-               $ propsFromList
-               $ do (q,qs) <- chooseProp ps0
-                    i      <- implied qs q
-                    guard (isNothing (solve ps0 (factProp i)))
-                    return i
+{- Setup a system that assumes the new facts by applying the
+improving substitution to the assumptions and the original goal. -}
 
-     let su1 = compose su su0
-         ps1 = filterProps (not . trivial . factProp) (impAsmps su ps0)
+                    let ps1 = impFacts su2 ps
+                    (p1,p_su2) <- impGoal su2 p
 
-     if isEmptyProps ps
-       then tr "computed closure:" (propsToList ps1)
-           $ return (su1, ps1)
-       else tr "adding:" (propsToList ps) $ closure1 (su1, unionProps ps ps1)
+                    case solve (facts ps1) (goalProp p1) of
+
+                      -- Aw, nothing worked!
+                      Nothing -> noLuck
+
+                      -- Success!
+                      Just proof -> return $ YesIf eqns
+                                           $ proofLet (goalName p1) proof
+                                           $ proofLet (goalName p)  p_su2 p_su
 
 
-{-------------------------------------------------------------------------------
-Proprties of the Entailment Function
--------------------------------------------------------------------------------}
+
+
+
+{- Proprties of the Entailment Function.
+
+The following two functions state some properties of the entailment
+function.  It would be nice to try to prove that they hold.
+-}
+
 
 -- | Adding more assumptions cannot make things less contradictory
-entails_any_prop :: Props Fact -> Goal -> Fact -> TCN ()
+entails_any_prop :: Facts -> Goal -> Fact -> TCN ()
 entails_any_prop ps q p =
   do res <- entails ps q
      case res of
-       NotForAny -> (guard . isNotForAny) =<< entails (insertProps p ps) q
+       NotForAny ->
+         case addFactTrans ps p of
+           Nothing -> return ()
+           Just ps1 -> (guard . isNotForAny) =<< entails ps1 q
        _         -> return ()
 
 
 -- | Dropping assumptions cannot make things more contradictory or more defined.
-enatils_all_prop :: Fact -> Props Fact -> Goal -> TCN ()
+enatils_all_prop :: Fact -> Facts -> Goal -> TCN ()
 enatils_all_prop p ps q =
-  do ans <- entails (insertProps p ps) q
-     case ans of
-       NotForAll -> (guard . isNotForAll) =<< entails ps q
-       _         -> return ()
+  case addFactTrans ps p of
+    Just ps1 -> do ans <- entails ps1 q
+                   case ans of
+                     NotForAll -> (guard . isNotForAll) =<< entails ps q
+                     _         -> return ()
+    _ -> return ()
 
 
 {-------------------------------------------------------------------------------
--- Substitutions
+Substitutions
 -------------------------------------------------------------------------------}
 
 -- The 3rd elemnt of the tuple is a proof that the variable equals the term.
@@ -736,19 +800,20 @@ mgu :: Proof -> Term -> Term -> Maybe Subst
 mgu _ x y | x == y   = return []
 mgu ev (Var x) t     = return [(x,t,ev)]
 mgu ev t (Var x)     = return [(x,t,ev)]
-mgu _ _ _              = mzero
+mgu _ _ _            = mzero
 
--- The proof here is that the two terms are euqal, as long 
--- as the equations are equalities.  For example,
--- if the substitutions is { ev: x = 3 }, and we have the term "x"
--- then we would get the term "3" and 'ev', a proof that "x = 3"
+{- The returned proof asserts that the original term and the term with
+the substitution applied are equal.
+For example: apSubst [ ("x", 3, ev) ] "x" == (3, ev)
+-}
+
 apSubst :: Subst -> Term -> (Term, Proof)
 apSubst su (Var x)
   | (t1,ev) : _ <- [ (t1,ev) | (y,t1,ev) <- su, eqType x y ] = (t1,ev)
 apSubst _ t           = (t, byRefl t)
 
--- Given a goal, return a potentially new goal, and a proof which
--- would solve the old goal in terms of the new one.
+{- Given a goal, return a potentially new goal, and a proof which
+solves the old goal in terms of the new one. -}
 impGoal :: Subst -> Goal -> TCN (Goal, Proof)
 impGoal su p
   | null su || propArgs p == ts  = return (p, ByAsmp (goalName p))
@@ -760,51 +825,22 @@ impGoal su p
   where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
 
 -- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
-impAsmp :: Subst -> Fact -> Fact
-impAsmp su p = p { factProof = byCong (propPred p) (propArgs p ++ ts)
+impFact :: Subst -> Fact -> Fact
+impFact su p = p { factProof = byCong (propPred p) (propArgs p ++ ts)
                                                           evs (factProof p)
                  , factProp  = Prop (propPred p) ts
                  }
   where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
 
 
-impAsmps :: Subst -> Props Fact -> Props Fact
-impAsmps su = mapProps (impAsmp su)
+impFacts :: Subst -> Facts -> Facts
+impFacts su fs = Facts { facts    = mapProps (impFact su) (facts fs)
+                       , factsEq  = compose su (factsEq fs)
+                       }
 
 
+--------------------------------------------------------------------------------
 
-
--- | Represent a substitution as a set of equations.
-substToEqns :: Subst -> Props Fact
-substToEqns su = propsFromList (map mk su)
-  where mk (x,t,ev) = Fact { factProof = ev
-                           , factProp  = Prop Eq [Var x, t]
-                           }
-
-
--- x = 2, x + y = 3
-
--- x = 2 => 2 + y = 3
-
--- | Turn the equations that we have into a substitution, and return
--- the remaining propositions with the substitution applied to them.
--- XXX: It might be better to simply keep these equations as
--- substitutions in the 'Props' type.
-improvingSubst :: Props Fact -> Maybe (Subst, Props Fact)
-improvingSubst ps  = do su <- loop [] (getPropsFor Eq ps)
-                        return (su, filterProps (not . trivial . factProp)
-                                   $ impAsmps su $ rmPropsFor Eq ps)
-  where
-  loop su (eq : eqs) =
-    do let [x,y] = propArgs eq
-       su1 <- mgu (factProof eq) x y
-       loop (compose su1 su) (map (impAsmp su1) eqs)
-  loop su [] = return su
-
-
-
-trivial :: Prop -> Bool
-trivial = isJust . solve noProps
 
 solve :: Props Fact -> Prop -> Maybe Proof
 solve  _ (Prop Eq [x,y]) | x == y = Just (byRefl x)
@@ -871,38 +907,80 @@ Note that we start by first adding all assumptions, and only then we consider
 the goals because the assumptions might help us to solve the goals.
 -------------------------------------------------------------------------------}
 
-type SolverS = (InertProps, [(EvVar,Proof)])
+data SolverS = SolverS
+  { ssTodoFacts :: [Fact]
+  , ssTodoGoals :: [Goal]
+  , ssSolved    :: [(EvVar,Proof)]
+  , ssInerts    :: InertProps
+  }
 
-addWorkItems :: SolverProps -> SolverS -> String -> Int -> Maybe SolverS
-addWorkItems ps is r s = fst `fmap` runTCN (addWorkItemsM ps is) r s
-
-addWorkItemsM :: SolverProps -> SolverS -> TCN SolverS
-addWorkItemsM ps ss@(is,solns) =
- case getOne (given ps) of
-   Just (g,gs) ->
-     do r <- addGiven g is
-        let js = mkInert (insertGiven g) r
-        addWorkItemsM (unionSolverProps (newWork r) ps { given = gs }) (js,solns)
-
-   Nothing ->
-     case getOne (wanted ps) of
-       Just (w,ws) ->
-         do r <- addWanted w is
-            let js = mkInert (insertWanted w) r
-            addWorkItemsM (unionSolverProps (newWork r) ps { wanted = ws })
-                                          (js, solvedWanted r ++ solns)
-       Nothing -> return ss
-
-  where
-  mkInert add r =
-    let as = case dropWanted r of
-               [] -> is
-               ns -> is { wanted = filterProps (keep ns) (wanted is) }
-    in if consumed r then as else add as
-  keep ns p = not (goalName p `elem` ns)
+initSolverS :: SolverS
+initSolverS = SolverS
+  { ssTodoGoals = []
+  , ssTodoFacts = []
+  , ssSolved    = []
+  , ssInerts    = noSolverProps
+  }
 
 
---------------------------------------------------------------------------------
+getFact :: SolverS -> Maybe (Fact, SolverS)
+getFact s = case ssTodoFacts s of
+              []     -> Nothing
+              f : fs -> Just (f, s { ssTodoFacts = fs })
+
+getGoal :: SolverS -> Maybe (Goal, SolverS)
+getGoal s = case ssTodoGoals s of
+              []     -> Nothing
+              g : gs -> Just (g, s { ssTodoGoals = gs })
+
+addSolved :: [(EvVar,Proof)] -> SolverS -> SolverS
+addSolved [] s = s
+addSolved xs s = s { ssSolved = xs ++ ssSolved s
+                   , ssInerts = is { wanted = filterProps keep (wanted is) }
+                   }
+  where is     = ssInerts s
+        keep p = not (goalName p `elem` map fst xs)
+
+nextState :: PassResult -> SolverS -> SolverS
+nextState r s = addSolved (solvedWanted r)
+                s { ssTodoFacts = newFacts r ++ ssTodoFacts s
+                  , ssTodoGoals = newGoals r ++ ssTodoGoals s
+                  }
+
+restartGoals :: SolverS -> SolverS
+restartGoals s = s { ssTodoGoals = propsToList (wanted is) ++ ssTodoGoals s
+                   , ssInerts    = is { wanted = noProps }
+                   }
+  where is = ssInerts s
+
+addWorkItems :: SolverS -> String -> Int -> Maybe SolverS
+addWorkItems is r s = fst `fmap` runTCN (addWorkItemsM is) r s
+
+-- The final state should have empty 'todo*' queues.
+addWorkItemsM :: SolverS -> TCN SolverS
+
+addWorkItemsM ss0 =
+  case getFact ss0 of
+    Just (fact, ss1) ->
+      do r <- addGiven fact (ssInerts ss1)
+         let ss2 = nextState r ss1
+         if consumed r
+            then addWorkItemsM ss2
+            else do is <- liftMb $ insertGiven fact $ ssInerts ss2
+                    addWorkItemsM $ restartGoals ss2 { ssInerts = is }
+
+    Nothing ->
+      case getGoal ss0 of
+       Just (goal, ss1) ->
+         do r <- addWanted goal (ssInerts ss1)
+            let ss2 = nextState r ss1
+            addWorkItemsM $
+              if consumed r
+                then ss2
+                else ss2 { ssInerts = insertWanted goal (ssInerts ss2) }
+
+       Nothing -> return ss0
+
 #else
 --------------------------------------------------------------------------------
 
@@ -1112,7 +1190,7 @@ instance (Ord a, PP a) => PP (Props a) where
 
 
 instance PP SolverProps where
-  pp is = vcat ( map pp (propsToList (given is))
+  pp is = vcat ( map pp (factsToList (given is))
               ++ map pp (propsToList (wanted is))
                )
 
@@ -1134,6 +1212,11 @@ tr x ys z = trace x (trace msg z)
   where msg = case ys of
                 [] -> "  (empty)"
                 _  -> show $ nest 2 $ vcat $ map pp ys
+
+liftMb :: MonadPlus m => Maybe a -> m a
+liftMb mb = case mb of
+              Nothing -> mzero
+              Just a  -> return a
 
 ppTrace :: Doc -> a -> a
 ppTrace d = trace (show d)

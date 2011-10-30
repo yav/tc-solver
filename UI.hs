@@ -9,11 +9,9 @@ import Network
 import Data.Char
 import qualified Data.Map as M
 import Numeric
-import Data.Maybe(fromMaybe)
 import System.Process
 import System.Exit(ExitCode(..))
 import Text.ParserCombinators.ReadP
-import Debug.Trace
 import System.Info
 import Text.PrettyPrint hiding (char)
 
@@ -75,14 +73,14 @@ data S = S { entered  :: M.Map Int [WorkItem]
            }
 
 initS :: S
-initS = S { entered = M.empty, inertSet = Just (noSolverProps, []) }
+initS = S { entered = M.empty, inertSet = Just initSolverS }
 
 
 addWorkItemsUI :: (Int,[WorkItem]) -> SolverS -> Maybe SolverS
-addWorkItemsUI (n,ws) is = addWorkItems set is ('w' : show n) (length ws + 1)
-  where set = SolverProps { wanted = propsFromList [ w | Wanted w <- ws ]
-                          , given  = propsFromList [ g | Given g  <- ws ]
-                          }
+addWorkItemsUI (n,ws) is = addWorkItems is1 ('w' : show n) (length ws + 1)
+  where is1 = is { ssTodoGoals = [ w | Wanted w <- ws ]
+                 , ssTodoFacts = [ g | Given g  <- ws ]
+                 }
 
 processCmd :: Cmd -> S -> S
 processCmd cmd s =
@@ -92,7 +90,7 @@ processCmd cmd s =
                    }
     RmC x     -> S { entered   = ents
                    , inertSet  = foldM (flip addWorkItemsUI)
-                                       (noSolverProps, [])
+                                       initSolverS
                                        (M.toList ents)
                    }
       where ents = M.delete x (entered s)
@@ -172,7 +170,7 @@ parseWI n txt =
   where
   mkGoal x p = Wanted Goal { goalName = mkName "w" x, goalProp = p }
   mkFact x p = Given Fact { factProof = ByAsmp (mkName "g" x), factProp = p }
-  mkName p x  = p ++ show n ++ "_" ++ show x
+  mkName p x  = p ++ show n ++ "_" ++ show (x :: Integer)
 
 
 parseProp :: Int -> String -> Maybe [Prop]
@@ -180,8 +178,8 @@ parseProp n txt =
   do s <- dec txt
      readMb' (readP_to_S (pEqn n)) s
   where
-  dec ('%' : x : y : xs) = do n <- readMb' readHex [x,y]
-                              fmap (toEnum n :) (dec xs)
+  dec ('%' : x : y : xs) = do n1 <- readMb' readHex [x,y]
+                              fmap (toEnum n1 :) (dec xs)
   dec []                 = return []
   dec (x : xs)           = (x:) `fmap` dec xs
 
@@ -194,12 +192,14 @@ renderIS :: Maybe SolverS -> String
 renderIS Nothing = list [ list [ str "Wanted", str "(inconsistent)" ]
                         , list [ str "Given",  str "(inconsistent)" ]
                         ]
-renderIS (Just (xs,ps)) =
-  list ( [ renderWI (Given g)  | g <- propsToList (given xs)  ] ++
+renderIS (Just ss) =
+  list ( [ renderWI (Given g)  | g <- factsToList (given xs)  ] ++
          [ renderWI (Wanted w) | w <- propsToList (wanted xs) ] ++
          [ list [ show "Proof", show $ ppp p ] | p <- ps ]
        )
   where ppp (x,y) = show (text x <+> text ":" <+> pp y)
+        xs = ssInerts ss
+        ps = ssSolved ss
 
 
 type JSON = String
@@ -233,7 +233,7 @@ pTerm pref n0 =
 
 pAtom :: Int -> Int -> ReadP (Term, Int, [Prop])
 pAtom pref n =
-  do munch isSpace
+  do _ <- munch isSpace
      msum
        [ do x <- readS_to_P reads
             return (Num x Nothing, n, [])
@@ -258,12 +258,14 @@ pOp = msum [ tchar '+' >> return Add
 
 newVar :: Int -> Int -> String
 newVar pref n = (vars !! n) ++ "_" ++ show pref
-  where vars      = concatMap chunk [ 0 .. ]
+  where vars      = concatMap chunk [ 0 :: Integer .. ]
         toVar c a = if a == 0 then [c] else c : show a
-        chunk n   = map (`toVar` n) [ 'a' .. 'z' ]
+        chunk n1  = map (`toVar` n1) [ 'a' .. 'z' ]
 
-tchar p = munch isSpace >> char p
+tchar :: Char -> ReadP ()
+tchar p = munch isSpace >> char p >> return ()
 
+test :: ReadP a -> String -> Maybe a
 test p ys = readMb' (readP_to_S p) ys
 
 --------------------------------------------------------------------------------
