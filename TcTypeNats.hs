@@ -220,6 +220,13 @@ insertImpFact f fs =
                         , factsEq = compose su (factsEq fs)
                         }
                 )
+
+    -- XXX: It'd be better to deal with this in a more generic way.
+    -- One option is to combine defineition of leq and anti-symmetry
+    -- to get this rule derive a contradiction. For example:
+    -- 4 <= 3  ==>    4 == 3   ==> False
+    Prop Leq [Num x _, Num y _] | x > y -> Nothing
+
     _ -> return ([], fs { facts = insertProps f (facts fs) })
 
 
