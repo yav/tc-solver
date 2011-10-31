@@ -5,6 +5,7 @@ import Control.Monad(foldM,guard,MonadPlus(..))
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.List(find)
+import Data.Either(partitionEithers)
 import Text.PrettyPrint
 import Data.List(zipWith5)
 import Debug.Trace
@@ -136,6 +137,19 @@ filterProps p (P ps) = P (M.mapMaybeWithKey upd ps)
   where upd _ ts = let xs = S.filter p ts
                    in if S.null xs then Nothing else Just xs
 
+{- Apply a function to all memerbs, and keep only the ones that do
+not change (i.e., the parameter returns 'Nothing').  The new values
+of the members that did change are returned in a list. -}
+
+mapExtract :: (Ord a, HasProp a) => (a -> Maybe a) -> Props a ->
+                                                        ([a], Props a)
+mapExtract f ps = case partitionEithers $ map apply $ propsToList ps of
+                    (remains,changed) -> (changed, propsFromList remains)
+  where apply x = case f x of
+                    Nothing -> Left x
+                    Just a  -> Right a
+
+
 -- | Remove propositions with the given predicate constructor.
 rmPropsFor :: Pred -> Props a -> Props a
 rmPropsFor op (P as) = P (M.delete op as)
@@ -184,7 +198,7 @@ factsToList fs = substToFacts (factsEq fs) ++ propsToList (facts fs)
 noFacts :: Facts
 noFacts = Facts { facts = noProps, factsEq = emptySubst }
 
-insertFact :: Fact -> Facts -> Maybe Facts
+insertFact :: Fact -> Facts -> Maybe ([Fact],Facts)
 insertFact f fs = insertImpFact (impFact (factsEq fs) f) fs
 
 
@@ -192,15 +206,21 @@ insertFact f fs = insertImpFact (impFact (factsEq fs) f) fs
 already been applied to the new fact.  It can be used as an optimization to
 avoid applying the substitution twice. -}
 
-insertImpFact :: Fact -> Facts -> Maybe Facts
+insertImpFact :: Fact -> Facts -> Maybe ([Fact],Facts)
 insertImpFact f fs =
   case factProp f of
     Prop Eq [s,t] ->
       do su <- mgu (factProof f) s t
-         return Facts { facts   = mapProps (impFact su) (facts fs)
-                      , factsEq = compose su (factsEq fs)
-                      }
-    _ -> return fs { facts = insertProps f (facts fs) }
+         let improve fact = case impFactChange su fact of
+                              (_,False) -> Nothing
+                              (fact1,_) -> Just fact1
+             (changed,remain) = mapExtract improve (facts fs)
+         return ( changed
+                , Facts { facts   = remain
+                        , factsEq = compose su (factsEq fs)
+                        }
+                )
+    _ -> return ([], fs { facts = insertProps f (facts fs) })
 
 
 {- 'addFact' is simillar to 'insertFact' but it returns a bit more detail
@@ -227,7 +247,8 @@ can be solved in terms of the new fact. -}
 
                Nothing ->
                  case insertImpFact fact cur_known of
-                   Just ok -> Added (implied (facts cur_known) fact) ok
+                   Just (new,ok) -> Added (new ++
+                                            implied (facts cur_known) fact) ok
                    Nothing -> Inconsistent
 
 
@@ -273,9 +294,9 @@ data SolverProps = SolverProps { given :: Facts, wanted :: Props Goal }
 noSolverProps :: SolverProps
 noSolverProps = SolverProps { given = noFacts, wanted = noProps }
 
-insertGiven :: Fact -> SolverProps -> Maybe SolverProps
-insertGiven g ps = do gs <- insertFact g (given ps)
-                      return ps { given = gs }
+insertGiven :: Fact -> SolverProps -> Maybe ([Fact],SolverProps)
+insertGiven g ps = do (new,gs) <- insertFact g (given ps)
+                      return (new, ps { given = gs })
 
 insertWanted :: Goal -> SolverProps -> SolverProps
 insertWanted w ps = ps { wanted = insertProps w (wanted ps) }
@@ -996,8 +1017,11 @@ addWorkItemsM ss0 =
          let ss2 = nextState r ss1
          if consumed r
             then addWorkItemsM ss2
-            else do is <- liftMb $ insertGiven fact $ ssInerts ss2
-                    addWorkItemsM $ restartGoals ss2 { ssInerts = is }
+            else do (new,is) <- liftMb $ insertGiven fact $ ssInerts ss2
+                    addWorkItemsM $ restartGoals
+                      ss2 { ssTodoFacts = new ++ ssTodoFacts ss2
+                          , ssInerts    = is
+                          }
 
     Nothing ->
       case getGoal ss0 of
