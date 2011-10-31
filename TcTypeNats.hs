@@ -2,18 +2,18 @@
 module TcTypeNats where
 
 import Control.Monad(foldM,guard,MonadPlus(..))
-import Debug.Trace
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.List(find)
 import Text.PrettyPrint
 import Data.List(zipWith5)
+import Debug.Trace
 
 {-------------------------------------------------------------------------------
 Terms and Propositions
 -------------------------------------------------------------------------------}
 
-type Var  = Xi
+newtype Var = V Xi
 
 {- The 'Xi' in the 'Num' constructor stores the original 'Xi' type that
 gave rise to the number. It is there in an attempt to preserve type synonyms. -}
@@ -167,12 +167,6 @@ instance Eq Fact where
 instance Ord Fact where
   compare x y = compare (factProp x) (factProp y)
 
-{- The function 'goalToFact' is used when we attempt to solve a new goal
-in terms of already existing goals. -}
-goalToFact :: Goal -> Fact
-goalToFact g = Fact { factProof = ByAsmp (goalName g), factProp = goalProp g }
-
-
 
 --------------------------------------------------------------------------------
 
@@ -185,11 +179,10 @@ data Facts = Facts { facts    :: Props Fact -- Excluding equality
                    }
 
 factsToList :: Facts -> [Fact]
-factsToList fs = map toEqn (factsEq fs) ++ propsToList (facts fs)
-  where toEqn (x,t,p) = Fact { factProof = p, factProp = Prop Eq [Var x,t] }
+factsToList fs = substToFacts (factsEq fs) ++ propsToList (facts fs)
 
 noFacts :: Facts
-noFacts = Facts { facts = noProps, factsEq = [] }
+noFacts = Facts { facts = noProps, factsEq = emptySubst }
 
 insertFact :: Fact -> Facts -> Maybe Facts
 insertFact f fs = insertImpFact (impFact (factsEq fs) f) fs
@@ -210,7 +203,7 @@ insertImpFact f fs =
     _ -> return fs { facts = insertProps f (facts fs) }
 
 
-{- 'addFact' is simillar to 'insertFact' but ith returns a bit more detail
+{- 'addFact' is simillar to 'insertFact' but it returns a bit more detail
 about what happened.  In particular, if the fact is actually to be added
 to the collection, we also compute a set of additional facts that follow
 from combining the existing facts with the new one. -}
@@ -222,8 +215,8 @@ data AddFact = Inconsistent
 
 addFact :: Fact -> Facts -> AddFact
 addFact fact0 cur_known =
-  let fact = impFact (factsEq cur_known) fact0
-  in if fact /= fact0
+  let (fact,changed) = impFactChange (factsEq cur_known) fact0
+  in if changed
         then Improved fact
         else case solve (facts cur_known) (factProp fact) of
                Just _ -> AlreadyKnown
@@ -247,14 +240,28 @@ addFactTrans facts0  fact =
     Inconsistent    -> mzero
     AlreadyKnown    -> return facts0
     Improved fact1  -> addFactTrans  facts0 fact1
-    Added fs facts1 -> addFactsTrans facts1 fs
+    Added fs facts1 -> addFactsTrans' facts1 fs
 
 
 {- Add a collection of facts and all the facts that follow from them. -}
 
-addFactsTrans :: Facts -> [Fact] -> Maybe Facts
-addFactsTrans = foldM addFactTrans
+addFactsTrans' :: Facts -> [Fact] -> Maybe Facts
+addFactsTrans' = foldM addFactTrans
 
+addFactsTrans fs facts0 =
+  trace "Transitive facts" $
+  case addFactsTrans' fs facts0 of
+    Nothing -> trace "(nothing)" Nothing
+    Just x  -> trace (show (pp x)) $ Just x
+
+
+{- The function 'goalToFact' is used when we attempt to solve a new goal
+in terms of already existing goals. -}
+goalToFact :: Goal -> Fact
+goalToFact g = Fact { factProof = ByAsmp (goalName g), factProp = goalProp g }
+
+assumeGoals :: MonadPlus m => [Goal] -> Facts -> m Facts
+assumeGoals as bs = liftMb $ addFactsTrans bs $ map goalToFact as
 
 --------------------------------------------------------------------------------
 
@@ -310,6 +317,10 @@ data Proof    = ByAsmp EvVar
 byRefl :: Term -> Proof
 byRefl t = Using EqRefl [t] []
 
+isRefl :: Proof -> Bool
+isRefl (Using EqRefl _ _) = True
+isRefl _ = False
+
 bySym :: Term -> Term -> Proof -> Proof
 bySym _ _ p@(Using EqRefl _ _) = p
 bySym _ _ (Using EqSym _ [p]) = p
@@ -323,11 +334,11 @@ byTrans _ _ _ (Using EqRefl _ _) p = p
 byTrans _ _ _ p (Using EqRefl _ _) = p
 byTrans t1 t2 t3 p1 p2 = Using EqTrans [t1,t2,t3] [p1,p2]
 
+
 -- (x1 = y1, x2 = y2, P x1 x2) => P y1 y2
 byCong :: Pred -> [Term] -> [Proof] -> Proof -> Proof
 byCong _ _ qs q | all isRefl qs = q
-  where isRefl (Using EqRefl _ _) = True
-        isRefl _ = False
+
 -- (x1 == y1, x2 == y2, x1 == x2) => y1 = y2
 byCong Eq [x1,x2,y1,y2] [ xy1, xy2 ] xx =
                   byTrans y1 x2 y2 (byTrans y1 x1 x2 (bySym x1 y1 xy1) xx) xy2
@@ -473,9 +484,6 @@ of the auxiliary function \Verb"chooseProp", which extracts a single
 element from a collection in all possible ways.  -}
 
 
-addGiven  :: Fact -> InertProps -> TCN PassResult
-addWanted :: Goal -> InertProps -> TCN PassResult
-
 data PassResult = PassResult { solvedWanted :: [(EvVar,Proof)]
                              , newGoals     :: [Goal]
                              , newFacts     :: [Fact]
@@ -498,6 +506,7 @@ When we add a new assumption to an inert set we check for ``interactions''
 with the existing assumptions by using the entailment function.
 -------------------------------------------------------------------------------}
 
+addGiven  :: Fact -> InertProps -> TCN PassResult
 addGiven g props =
   case addFact g (given props) of
 
@@ -536,6 +545,7 @@ the new goal in terms of already existing goals, thus leaving the inert
 set unchanged.
 -------------------------------------------------------------------------------}
 
+addWanted :: Goal -> InertProps -> TCN PassResult
 addWanted w props =
 
      do asmps <- assumeGoals wantedList (given props)
@@ -581,7 +591,6 @@ goals that result in no interaction in the inert set. -}
 
   where
   wantedList        = propsToList (wanted props)
-  assumeGoals as bs = liftMb $ addFactsTrans bs $ map goalToFact as
 
 {- The function 'checkExisting' has the details of how to check for interaction
 between some existing goal, 'w1', and the new goal 'w'.  The function uses
@@ -712,39 +721,37 @@ substitution.
 goal, otherwise we would not be making any progress. -}
 
                Prop Eq [Var x, t]
-                 | any (\(x',t',_) -> x == x' && t == t') su1 -> noLuck
+                 | bindsSubst x t su1 -> noLuck
 
                _ ->
 
 {- At this point we have a candidate for improvement.
 Now we need to check if the new facts can help to solve the original goal.
 
-The first thing to do is replace the proof of the computed fact with
+The first thing to do is replace the proof of the computed fact with a
 fresh assumption.  Remember that these proofs were constructed by assuming
 the original goal, so they are no good for the reversed implication.
 -}
 
-                 do let fixup (x,t,_) =
-                           do g <- newGoal (Prop Eq [Var x, t])
-                              return (g, (x,t,ByAsmp (goalName g)))
+                 do eqns <- mapM (newGoal . factProp) (substToFacts su1)
+                    case assumeGoals eqns ps of
 
-                    (eqns,su2) <- unzip `fmap` mapM fixup su1
+                      -- The goal is indirectly incompatible with the facts.
+                      Nothing -> return NotForAny
 
-{- Setup a system that assumes the new facts by applying the
-improving substitution to the assumptions and the original goal. -}
+                      -- OK, solving time.
+                      Just ps1 ->
+                        do (p1,p_su2) <- impGoal (factsEq ps1) p
+                           case solve (facts ps1) (goalProp p1) of
 
-                    let ps1 = impFacts su2 ps
-                    (p1,p_su2) <- impGoal su2 p
+                             -- Aw, nothing worked!
+                             Nothing -> noLuck
 
-                    case solve (facts ps1) (goalProp p1) of
-
-                      -- Aw, nothing worked!
-                      Nothing -> noLuck
-
-                      -- Success!
-                      Just proof -> return $ YesIf eqns
-                                           $ proofLet (goalName p1) proof
-                                           $ proofLet (goalName p)  p_su2 p_su
+                             -- Success!
+                             Just proof ->
+                               return $ YesIf eqns
+                                      $ proofLet (goalName p1) proof
+                                      $ proofLet (goalName p)  p_su2 p_su
 
 
 
@@ -780,43 +787,60 @@ enatils_all_prop p ps q =
     _ -> return ()
 
 
-{-------------------------------------------------------------------------------
-Substitutions
--------------------------------------------------------------------------------}
+{- Substitutions With Evidence -}
 
--- The 3rd elemnt of the tuple is a proof that the variable equals the term.
-type Subst  = [ (Var,Term, Proof) ]
+{- The proof asserts that the variable (as a term) is equal to the term. -}
+newtype Subst  = Subst (M.Map Var (Term, Proof))
 
+substToFacts :: Subst -> [Fact]
+substToFacts (Subst m) = [ Fact { factProp  = Prop Eq [Var x, t]
+                                , factProof = ev
+                                } | (x,(t,ev)) <- M.toList m ]
+
+emptySubst :: Subst
+emptySubst = Subst M.empty
+
+isEmptySubst :: Subst -> Bool
+isEmptySubst (Subst m) = M.null m
+
+singleSubst :: Var -> Term -> Proof -> Subst
+singleSubst x t e = Subst (M.singleton x (t,e))
+
+bindsSubst :: Var -> Term -> Subst -> Bool
+bindsSubst x t (Subst m) = case M.lookup x m of
+                             Nothing     -> False
+                             Just (t1,_) -> t == t1
 
 compose :: Subst -> Subst -> Subst
-compose s2 s1 =
-  [ (x, t2, byTrans (Var x) t t2 p1 p2)
-                    | (x,t,p1) <- s1, let (t2,p2) = apSubst s2 t ] ++
-  [ z | z@(x,_,_) <- s2, all (not . eqType x . fst3) s1 ]
-  where fst3 (x,_,_) = x
+compose s2@(Subst m2) (Subst m1) = Subst (M.union (M.mapWithKey ap2 m1) m2)
+  where ap2 x (t,p1) = let (t2,p2) = apSubst s2 t
+                       in (t2, byTrans (Var x) t t2 p1 p2)
 
 -- For simple terms no need to occur check
 mgu :: Proof -> Term -> Term -> Maybe Subst
-mgu _ x y | x == y   = return []
-mgu ev (Var x) t     = return [(x,t,ev)]
-mgu ev t (Var x)     = return [(x,t,ev)]
+mgu _ x y | x == y   = return emptySubst
+mgu ev (Var x) t     = return (singleSubst x t ev)
+mgu ev t (Var x)     = return (singleSubst x t ev)
 mgu _ _ _            = mzero
+
 
 {- The returned proof asserts that the original term and the term with
 the substitution applied are equal.
 For example: apSubst [ ("x", 3, ev) ] "x" == (3, ev)
+
+Here we work with only very simple proofs.  For more complex terms,
+the proofs would also need to use congruence.
 -}
 
 apSubst :: Subst -> Term -> (Term, Proof)
-apSubst su (Var x)
-  | (t1,ev) : _ <- [ (t1,ev) | (y,t1,ev) <- su, eqType x y ] = (t1,ev)
-apSubst _ t           = (t, byRefl t)
+apSubst (Subst m) (Var x) | Just res <- M.lookup x m  = res
+apSubst _ t = (t, byRefl t)
 
 {- Given a goal, return a potentially new goal, and a proof which
 solves the old goal in terms of the new one. -}
 impGoal :: Subst -> Goal -> TCN (Goal, Proof)
 impGoal su p
-  | null su || propArgs p == ts  = return (p, ByAsmp (goalName p))
+  | isEmptySubst su || propArgs p == ts  = return (p, ByAsmp (goalName p))
   | otherwise = do g <- newGoal (Prop (propPred p) ts)
                    return (g, byCong (propPred p)
                                 (ts ++ propArgs p)
@@ -826,17 +850,20 @@ impGoal su p
 
 -- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
 impFact :: Subst -> Fact -> Fact
-impFact su p = p { factProof = byCong (propPred p) (propArgs p ++ ts)
-                                                          evs (factProof p)
-                 , factProp  = Prop (propPred p) ts
-                 }
+impFact su p = fst (impFactChange su p)
+
+-- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
+impFactChange :: Subst -> Fact -> (Fact, Bool)
+impFactChange su p = ( p { factProof = byCong (propPred p) (propArgs p ++ ts)
+                                                           evs (factProof p)
+                         , factProp  = Prop (propPred p) ts
+                         }
+
+                     -- Indicates if something changed.
+                     , not (all isRefl evs)
+                     )
   where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
 
-
-impFacts :: Subst -> Facts -> Facts
-impFacts su fs = Facts { facts    = mapProps (impFact su) (facts fs)
-                       , factsEq  = compose su (factsEq fs)
-                       }
 
 
 --------------------------------------------------------------------------------
@@ -882,6 +909,9 @@ instance MonadPlus TCN where
 
 eqType :: Xi -> Xi -> Bool
 eqType = (==)
+
+cmpType :: Xi -> Xi -> Ordering
+cmpType = compare
 
 newGoal :: Prop -> TCN Goal
 newGoal p = T $ \r s ->
@@ -1085,8 +1115,6 @@ impossible c =
        { numNext = Just err, numInert = Nothing, numNewWork = emptyWorkList }
 
 
-
-
 -- XXX: What do we do with "derived"?
 canonicalNum :: CanonicalCts -> CanonicalCts -> CanonicalCts -> CanonicalCt ->
                 TcS NumericsResult
@@ -1146,8 +1174,11 @@ Pretty Printing
 class PP a where
   pp :: a -> Doc
 
+instance PP Var where
+  pp (V x) = text x
+
 instance PP Term where
-  pp (Var x)    = text x
+  pp (Var x)    = pp x
   pp (Num x _)  = integer x
 
 instance PP Pred where
@@ -1190,16 +1221,22 @@ instance (Ord a, PP a) => PP (Props a) where
 
 
 instance PP SolverProps where
-  pp is = vcat ( map pp (factsToList (given is))
-              ++ map pp (propsToList (wanted is))
-               )
+  pp is = pp (given is) $$ pp (wanted is)
 
+instance PP Facts where
+  pp fs = vcat (map pp (factsToList fs))
 
 
 
 {-------------------------------------------------------------------------------
 Misc.
 -------------------------------------------------------------------------------}
+
+instance Eq Var where
+  V x == V y  = eqType x y
+
+instance Ord Var where
+  compare (V x) (V y) = cmpType x y
 
 -- | Choce an element from a list in all possible ways.
 choose :: [a] -> [(a,[a])]
