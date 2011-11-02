@@ -275,10 +275,19 @@ addFactTrans facts0  fact =
     Added fs facts1 -> addFactsTrans' facts1 fs
 
 
-{- Add a collection of facts and all the facts that follow from them. -}
+{- Add a collection of facts and all the facts that follow from them.
+We add equalities first, because they might lead to improvements that,
+in turn, would enable additional the discovery of additional facts.
+Furthermore, improvements "restart" so we do less work if we do equalities
+first. -}
 
 addFactsTrans' :: Facts -> [Fact] -> Maybe Facts
-addFactsTrans' = foldM addFactTrans
+addFactsTrans' fs = foldM addFactTrans fs . reorder [] []
+  where reorder eqs others [] = eqs ++ others
+        reorder eqs others (e : es) =
+          case factProp e of
+            Prop Eq _ -> reorder (e : eqs) others es
+            _         -> reorder eqs (e : others) es
 
 addFactsTrans :: Facts -> [Fact] -> Maybe Facts
 addFactsTrans fs facts0 =
@@ -286,6 +295,7 @@ addFactsTrans fs facts0 =
   case addFactsTrans' fs facts0 of
     Nothing -> trace "(nothing)" Nothing
     Just x  -> trace (show (pp x)) $ Just x
+
 
 
 {- The function 'goalToFact' is used when we attempt to solve a new goal
