@@ -222,7 +222,7 @@ insertImpFact f fs =
                 )
 
     -- XXX: It'd be better to deal with this in a more generic way.
-    -- One option is to combine defineition of leq and anti-symmetry
+    -- One option is to combine definition of leq and anti-symmetry
     -- to get this rule derive a contradiction. For example:
     -- 4 <= 3  ==>    4 == 3   ==> False
     Prop Leq [Num x _, Num y _] | x > y -> Nothing
@@ -248,9 +248,13 @@ addFact fact0 cur_known =
         else case solve (facts cur_known) (factProp fact) of
                Just _ -> AlreadyKnown
 
-{- NOTE: We don't keep the set of known facts as "minimal".
+{- NOTE: We don't keep the set of known facts fully "minimal".
 If we wanted to do this, we'd have to remove existing facts that
-can be solved in terms of the new fact. -}
+can be solved in terms of the new fact.  However, if the fact improved
+some exisiting facts, those are removed from the inert set and the
+improved facts are added as new work to be considered.  This process stops
+because we can improve facts only so much before thet are full instantiated.
+-}
 
                Nothing ->
                  case insertImpFact fact cur_known of
@@ -276,6 +280,7 @@ addFactTrans facts0  fact =
 addFactsTrans' :: Facts -> [Fact] -> Maybe Facts
 addFactsTrans' = foldM addFactTrans
 
+addFactsTrans :: Facts -> [Fact] -> Maybe Facts
 addFactsTrans fs facts0 =
   trace "Transitive facts" $
   case addFactsTrans' fs facts0 of
@@ -905,7 +910,6 @@ byAsmp :: Props Fact -> Prop -> Maybe Proof
 byAsmp ps p =
   do q <- find (\x -> propArgs x == propArgs p) $ getPropsFor (propPred p) ps
      return (factProof q)
-
 
 
 {-------------------------------------------------------------------------------
