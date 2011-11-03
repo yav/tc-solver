@@ -1,10 +1,11 @@
 {-# LANGUAGE CPP #-}
 module TcTypeNats where
 
-import Control.Monad(foldM,guard,MonadPlus(..))
+import Control.Monad(foldM,guard,MonadPlus(..),msum)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.List(find)
+import Data.Maybe(fromMaybe)
 import Data.Either(partitionEithers)
 import Text.PrettyPrint
 import Data.List(zipWith5)
@@ -694,8 +695,16 @@ if a set of assumptions (the first argument), entail a certain proposition
 -------------------------------------------------------------------------------}
 
 
+entailsSimple :: Facts -> Goal -> TCN Answer
+entailsSimple ps p =
+  do improved <- impGoal (factsEq ps) p
+     return $ fromMaybe NotForAll
+            $ msum [ do (p1,proof) <- improved
+                        return (YesIf [p1] proof)
 
-
+                   , do proof <- solve (facts ps) (goalProp p)
+                        return (YesIf [] proof)
+                   ]
 
 entails :: Facts -> Goal -> TCN Answer
 
@@ -706,25 +715,29 @@ entails ps p | gTrace msg = undefined
                                       $$ pp p
                                         )
 
-entails ps p' =
-  do (p,p_su) <- impGoal (factsEq ps) p'
-     case solve (facts ps) (goalProp p) of
+entails ps p =
+  do attempt1 <- entailsSimple ps p
+     case attempt1 of
+       NotForAll ->
+         case addFactsTrans ps [goalToFact p] of
 
-       Just proof ->
-         return (YesIf [] $ proofLet (goalName p) proof p_su)
+           -- The new goal contradicts the given assumptions.
+           Nothing -> return NotForAny
 
-       Nothing ->
+           {- New facts!  We consider only the equalities.
+           Note that it might happen that the "new" facts contain
+           the original goal, so we make sure to filter it out. -}
+           Just (Facts { factsEq = su1 }) ->
+             do eqns <- mapM newGoal $ filter (/= goalProp p)
+                                     $ map factProp $ substToFacts su1
+                case assumeGoals eqns ps of
+                  Nothing  -> return NotForAny
+                  Just ps1 -> entailsSimple ps1 p
 
-{- This is what we do if nothing else works: if we managed to improve the
-goal using the existing equalities, then we solve the original and continue
-with the new goal.  Otherwise, we report that we don't know how to solve it. -}
+       _ -> return attempt1
 
-         let noLuck = return (if goalName p == goalName p'
-                                 then NotForAll
-                                 else YesIf [p] p_su)
-         in
 
-{- Before giving up, however, we try improvement proper.  This means that we
+{- Note A: We try improvement proper.  This means that we
 need to find a logically equivalent set of goals that might lead to progress.
 
 The new goals needs to imply the original to preserve soundness (i.e.,
@@ -749,53 +762,6 @@ Finally, we check if we can solve the original goal by using the new
 proposiitons as assumptions, and if so we have found an improving
 substitution.
 -}
-
-         case addFactsTrans ps [goalToFact p] of
-
-           -- The new goal contradicts the given assumptions.
-           Nothing -> return NotForAny
-
-           -- New facts!  We consider only the equalities.
-           Just (Facts { factsEq = su1 }) ->
-
-             case goalProp p' of
-
-{- Make sure that the new equalities do not contain the original
-goal, otherwise we would not be making any progress. -}
-
-               Prop Eq [Var x, t]
-                 | bindsSubst x t su1 -> noLuck
-
-               _ ->
-
-{- At this point we have a candidate for improvement.
-Now we need to check if the new facts can help to solve the original goal.
-
-The first thing to do is replace the proof of the computed fact with a
-fresh assumption.  Remember that these proofs were constructed by assuming
-the original goal, so they are no good for the reversed implication.
--}
-
-                 do eqns <- mapM (newGoal . factProp) (substToFacts su1)
-                    case assumeGoals eqns ps of
-
-                      -- The goal is indirectly incompatible with the facts.
-                      Nothing -> return NotForAny
-
-                      -- OK, solving time.
-                      Just ps1 ->
-                        do (p1,p_su2) <- impGoal (factsEq ps1) p
-                           case solve (facts ps1) (goalProp p1) of
-
-                             -- Aw, nothing worked!
-                             Nothing -> noLuck
-
-                             -- Success!
-                             Just proof ->
-                               return $ YesIf eqns
-                                      $ proofLet (goalName p1) proof
-                                      $ proofLet (goalName p)  p_su2 p_su
-
 
 
 
@@ -879,16 +845,17 @@ apSubst :: Subst -> Term -> (Term, Proof)
 apSubst (Subst m) (Var x) | Just res <- M.lookup x m  = res
 apSubst _ t = (t, byRefl t)
 
-{- Given a goal, return a potentially new goal, and a proof which
-solves the old goal in terms of the new one. -}
-impGoal :: Subst -> Goal -> TCN (Goal, Proof)
+{- Given a goal, return a new goal, and a proof which
+solves the old goal in terms of the new one.
+We return 'Nothing' if nothing got improved. -}
+impGoal :: Subst -> Goal -> TCN (Maybe (Goal, Proof))
 impGoal su p
-  | isEmptySubst su || propArgs p == ts  = return (p, ByAsmp (goalName p))
+  | isEmptySubst su || propArgs p == ts  = return Nothing
   | otherwise = do g <- newGoal (Prop (propPred p) ts)
-                   return (g, byCong (propPred p)
-                                (ts ++ propArgs p)
-                                (zipWith3 bySym (propArgs p) ts evs)
-                                (ByAsmp (goalName g)))
+                   return $ Just (g, byCong (propPred p)
+                                       (ts ++ propArgs p)
+                                       (zipWith3 bySym (propArgs p) ts evs)
+                                       (ByAsmp (goalName g)))
   where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
 
 -- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
@@ -910,7 +877,6 @@ impFactChange su p = ( p { factProof = byCong (propPred p) (propArgs p ++ ts)
 
 
 --------------------------------------------------------------------------------
-
 
 solve :: Props Fact -> Prop -> Maybe Proof
 solve  _ (Prop Eq [x,y]) | x == y = Just (byRefl x)
