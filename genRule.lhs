@@ -268,22 +268,23 @@ Commutativity
 >   ]
 >   where x : y : _ = srcOfVars V 0
 
-
 > asmpRules :: [ Rule ]
 > asmpRules =
 >     foldr addRule [] $
 >     specAx $
->     specSimple (funs ++ map toSimpleRule (
->                   [ aRule "LeqAsym"  [ x <== y, y <== x ] (x === y)
->                   ])) ++
->     map toSimpleRule (
+>     specSimple $
+>     funs ++ map toSimpleRule (
 >     [ aRule "SubL"     [ x1  +  y  === x2  +  y           ] (x1 === x2)
 >     , aRule "SubR"     [ x   + y1  === x   +  y2          ] (y1 === y2)
 >     , aRule "DivL"     [ x1  *  y  === x2  *  y,  1 <== y ] (x1 === x2)
 >     , aRule "DivR"     [ x   * y1  === x   *  y2, 1 <== x ] (y1 === y2)
+>     , aRule "MulGrowR" [ x   * y   === x       ,  2 <== y ] (x  === 0)
+>     , aRule "MulGrowL" [ y   * x   === x       ,  2 <== y ] (x  === 0)
 >     , aRule "Root"     [ x1 ^^^ y  === x2 ^^^ y,  1 <== y ] (x1 === x2)
 >     , aRule "Log"      [ x  ^^^ y1 === x  ^^^ y2, 2 <== x ] (y1 === y2)
+>     , aRule "ExpGrow"  [ x  ^^^ y  === y                  ] (x  === 1)
 >     , aRule "LeqTrans" [ x <== y, y <== z ]                 (x <== z)
+>     , aRule "LeqAsym"  [ x <== y, y <== x ] (x === y)
 >     ]
 >     )
 >   where
@@ -293,8 +294,6 @@ Commutativity
 >             return $ mkRule ("Fun" ++ name)
 >                    [Prop op [x,y,z1], Prop op [x,y,z2]]
 >                    (Prop Eq [z1,z2])
->
-
 
 > notSymRules :: [Rule]
 > notSymRules = foldr addRule []

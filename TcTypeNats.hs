@@ -349,6 +349,7 @@ data Theorem  = AssumedFalse
               | Leq0 | Add0 | Mul0 | Mul1 | Root0 | Root1 | Log1
               | AddComm | MulComm
               | SubL | SubR | DivL | DivR | Root | Log
+              | MulGrowL | MulGrowR | ExpGrow
               | AddAssoc | MulAssoc | AddMul | MulExp | ExpAdd | ExpMul
               | AddAssocSym | MulAssocSym | AddMulSym
               | MulExpSym | ExpAddSym | ExpMulSym
