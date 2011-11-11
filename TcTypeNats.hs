@@ -718,23 +718,29 @@ entails ps p | gTrace msg = undefined
 entails ps p =
   do attempt1 <- entailsSimple ps p
      case attempt1 of
-       NotForAll ->
+       NotForAll
+         | improvable ->    -- Is there room for improvement?
          case addFactsTrans ps [goalToFact p] of
 
            -- The new goal contradicts the given assumptions.
            Nothing -> return NotForAny
 
-           {- New facts!  We consider only the equalities.
-           Note that it might happen that the "new" facts contain
-           the original goal, so we make sure to filter it out. -}
+           {- New facts!  We consider only the equalities. -}
            Just (Facts { factsEq = su1 }) ->
-             do eqns <- mapM newGoal $ filter (/= goalProp p)
-                                     $ map factProp $ substToFacts su1
+             do eqns <- mapM newGoal $ map factProp $ substToFacts su1
                 case assumeGoals eqns ps of
                   Nothing  -> return NotForAny
-                  Just ps1 -> entailsSimple ps1 p
+                  Just ps1 ->
+                    do ans <- entailsSimple ps1 p
+                       case ans of
+                         YesIf qs proof -> return (YesIf (eqns ++ qs) proof)
+                         _              -> return ans
 
        _ -> return attempt1
+
+  where improvable = case goalProp p of
+                       Prop Eq _ -> False -- Already an equality, leave it be.
+                       _         -> True
 
 
 {- Note A: We try improvement proper.  This means that we
@@ -1253,13 +1259,6 @@ instance Ord Var where
 choose :: [a] -> [(a,[a])]
 choose []     = []
 choose (x:xs) = (x,xs) : [ (y, x:ys) | (y,ys) <- choose xs ]
-
--- | For debuging lists of things.
-tr :: PP a => String -> [a] -> b -> b
-tr x ys z = trace x (trace msg z)
-  where msg = case ys of
-                [] -> "  (empty)"
-                _  -> show $ nest 2 $ vcat $ map pp ys
 
 liftMb :: MonadPlus m => Maybe a -> m a
 liftMb mb = case mb of
