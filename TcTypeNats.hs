@@ -380,6 +380,21 @@ byTrans _ _ _ p (Using EqRefl _ _) = p
 byTrans t1 t2 t3 p1 p2 = Using EqTrans [t1,t2,t3] [p1,p2]
 
 
+byLeqDef :: Integer -> Integer -> Proof
+byLeqDef x y = Using (DefLeq x y) [] []
+
+byLeqRefl :: Term -> Proof
+byLeqRefl t = Using LeqRefl [t] []
+
+byLeqTrans :: Term -> Term -> Term -> Proof -> Proof -> Proof
+byLeqTrans _ _ _ (Using LeqRefl _ _) p = p
+byLeqTrans _ _ _ p (Using LeqRefl _ _) = p
+byLeqTrans t1 t2 t3 p1 p2 = Using LeqTrans [t1,t2,t3] [p1,p2]
+
+byLeqAsym :: Term -> Term -> Proof -> Proof -> Proof
+byLeqAsym t1 t2 p1 p2 = Using LeqAsym [t1,t2] [p1,p2]
+
+
 -- (x1 = y1, x2 = y2, P x1 x2) => P y1 y2
 byCong :: Pred -> [Term] -> [Proof] -> Proof -> Proof
 byCong _ _ qs q | all isRefl qs = q
@@ -882,6 +897,149 @@ impFactChange su p = ( p { factProof = byCong (propPred p) (propArgs p ++ ts)
   where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
 
 
+
+{-------------------------------------------------------------------------------
+Reasoning About Order
+-------------------------------------------------------------------------------}
+
+{- To reason about order, we store the information about related terms
+as a graph: the nodes are terms, and the edges are labelled with proofs,
+providing evidence of the relation between the terms.
+-}
+
+
+data LeqEdge = LeqEdge { leProof :: Proof, leTarget :: Term }
+
+instance Eq LeqEdge where
+  x == y  = leTarget x == leTarget y
+
+instance Ord LeqEdge where
+  compare x y = compare (leTarget x) (leTarget y)
+
+data LeqEdges = LeqEdges { lnAbove :: S.Set LeqEdge
+                         , lnBelow :: S.Set Term
+                         }
+
+noLeqEdges :: LeqEdges
+noLeqEdges = LeqEdges { lnAbove = S.empty, lnBelow = S.empty }
+
+newtype LeqFacts = LM (M.Map Term LeqEdges)
+
+noLeqFacts :: LeqFacts
+noLeqFacts = LM M.empty
+
+leqFactsToList :: LeqFacts -> [Fact]
+leqFactsToList (LM m) =
+  do (from,edges) <- M.toList m
+     edge         <- S.toList (lnAbove edges)
+     let to = leTarget edge
+     guard (not (triv from to))
+     return Fact { factProof = leProof edge, factProp = Prop Leq [ from, to ] }
+
+  where triv (Num {}) (Num {}) = True
+        triv _       _         = False
+
+leqImmAbove :: LeqFacts -> Term -> S.Set LeqEdge
+leqImmAbove (LM m) t = case M.lookup t m of
+                         Just edges -> lnAbove edges
+                         Nothing    -> S.empty
+
+
+leqReachable :: LeqFacts -> Term -> Term -> Maybe Proof
+leqReachable m smaller larger =
+  search S.empty (S.singleton LeqEdge { leProof  = byLeqRefl smaller
+                                      , leTarget = smaller })
+  where
+  search visited todo =
+    do (LeqEdge { leProof = proof, leTarget = term }, rest) <- S.minView todo
+       if term == larger
+          then return proof
+          else let updProof e = e { leProof = byLeqTrans
+                                                smaller
+                                                term
+                                                (leTarget e)
+                                                proof
+                                                (leProof e) }
+
+                   new     = S.mapMonotonic updProof (leqImmAbove m term)
+                   vis     = S.insert term visited
+                   notDone = S.filter (not . (`S.member` vis) . leTarget)
+          in search vis (notDone new `S.union` notDone rest)
+
+
+leqLink :: Proof -> (Term,LeqEdges) -> (Term,LeqEdges) -> LeqFacts ->
+                                                  (LeqEdges,LeqEdges,LeqFacts)
+leqLink proof (lower, ledges) (upper, uedges) (LM m) =
+
+  let newLedges   = ledges { lnAbove = S.insert (LeqEdge { leProof  = proof
+                                                         , leTarget = upper
+                                                         }) (lnAbove ledges) }
+      newUedges   = uedges { lnBelow = S.insert lower (lnBelow uedges) }
+
+      delU        = (/= upper) . leTarget
+      adjAbove    = M.adjust $ \e -> e { lnAbove = S.filter delU  (lnAbove e) }
+      adjBelow    = M.adjust $ \e -> e { lnBelow = S.delete lower (lnBelow e) }
+      fold f xs x = S.fold f x xs
+
+  in ( newLedges
+     , newUedges
+     , LM $ M.insert lower newLedges
+          $ M.insert upper newUedges
+          $ fold adjAbove (lnBelow ledges)
+          $ fold adjBelow (S.mapMonotonic leTarget (lnAbove uedges))
+            m
+     )
+
+
+leqInsNode :: Term -> LeqFacts -> (LeqEdges, LeqFacts)
+leqInsNode t model@(LM m0) =
+  case M.splitLookup t m0 of
+    (_, Just r, _)  -> (r, model)
+    (left, Nothing, right) ->
+      let new           = noLeqEdges
+          ans1@(es1,m1) = ( new, LM (M.insert t new m0) )
+      in case t of
+           Var _ -> ans1
+           Num m _ ->
+             -- link to a smaller constnat, if any
+             let ans2@(es2, m2) =
+                   case toNum M.findMax left of
+                     Nothing -> ans1
+                     Just (n,l)  ->
+                       let (_,x,y) = leqLink (byLeqDef n m) l (t,es1) m1
+                       in (x,y)
+             -- link to a larger constant, if any
+             in case toNum M.findMin right of
+                  Nothing -> ans2
+                  Just (n,u)  ->
+                    let (x,_,y) = leqLink (byLeqDef m n) (t,es2) u m2
+                    in (x,y)
+
+  where
+  toNum f x = do guard (not (M.null x))
+                 let r = f x
+                 case fst r of
+                   Num n _ -> return (n,r)
+                   _       -> Nothing
+
+
+leqAddFact :: Proof -> Term -> Term -> LeqFacts -> Either Fact LeqFacts
+leqAddFact proof t1 t2 model =
+  let (n1,m1)   = leqInsNode t1 model
+      (n2,m2)   = leqInsNode t2 m1
+
+  in case leqReachable m2 t2 t1 of
+
+       Nothing ->
+         let (_,_,m3) = leqLink proof (t1,n1) (t2,n2) m2
+         in Right m3
+
+       {- We know the opposite: we don't add the fact
+          but propose an equality instead. -}
+       Just pOp -> Left $
+         Fact { factProof = byLeqAsym t1 t2 proof pOp
+              , factProp  = Prop Eq [t1,t2]
+              }
 
 --------------------------------------------------------------------------------
 
