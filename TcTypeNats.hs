@@ -19,6 +19,15 @@ newtype Var = V Xi
 
 {- The 'Xi' in the 'Num' constructor stores the original 'Xi' type that
 gave rise to the number. It is there in an attempt to preserve type synonyms. -}
+
+{- The ordering model below makes assumption about this ordering:
+  - Variables should come before numbers.  This is useful because we can
+    use "fst (split 0)" to get just the variable part of the map.
+  - Number-terms should be ordered as their corresponding numbers.  This is
+    useful so that we can use "splitLookup n" to find information about
+    a number and its neighbours.
+-}
+
 data Term = Var Var
           | Num Integer (Maybe Xi)
             deriving (Eq,Ord)
@@ -189,15 +198,18 @@ instance Ord Fact where
 and we inforce the invariant that this substitution is always applied to
 the remaining facts. -}
 
-data Facts = Facts { facts    :: Props Fact -- Excluding equality
+data Facts = Facts { facts    :: Props Fact -- Excluding equality and order
                    , factsEq  :: Subst      -- Normalized equalities
+                   , factsLeq :: LeqFacts   -- Normalized order
                    }
 
 factsToList :: Facts -> [Fact]
-factsToList fs = substToFacts (factsEq fs) ++ propsToList (facts fs)
+factsToList fs = substToFacts (factsEq fs) ++
+                 leqFactsToList (factsLeq fs) ++
+                 propsToList (facts fs)
 
 noFacts :: Facts
-noFacts = Facts { facts = noProps, factsEq = emptySubst }
+noFacts = Facts { facts = noProps, factsEq = emptySubst, factsLeq = noLeqFacts }
 
 insertFact :: Fact -> Facts -> Maybe ([Fact],Facts)
 insertFact f fs = insertImpFact (impFact (factsEq fs) f) fs
@@ -216,17 +228,28 @@ insertImpFact f fs =
                               (_,False) -> Nothing
                               (fact1,_) -> Just fact1
              (changed,remain) = mapExtract improve (facts fs)
-         return ( changed
-                , Facts { facts   = remain
-                        , factsEq = compose su (factsEq fs)
+
+{- Check if we need to rebuild the order model.  Currently, we rebuild the
+entire model if anything in it will change.  It may be possible to avoid
+some of this work (e.g., by computing parts of the model that would not
+be affected by the substitution). -}
+
+             (changedLeq, remainLeq) =
+               if leqFactsAffectedBy (factsLeq fs) su
+                  then (leqFactsToList (factsLeq fs), noLeqFacts)
+                  else ([],                           factsLeq fs)
+
+         return ( changedLeq ++ changed
+                , Facts { facts     = remain
+                        , factsLeq  = remainLeq
+                        , factsEq   = compose su (factsEq fs)
                         }
                 )
 
-    -- XXX: It'd be better to deal with this in a more generic way.
-    -- One option is to combine definition of leq and anti-symmetry
-    -- to get this rule derive a contradiction. For example:
-    -- 4 <= 3  ==>    4 == 3   ==> False
-    Prop Leq [Num x _, Num y _] | x > y -> Nothing
+    Prop Leq [s,t] ->
+      case leqAddFact (factProof f) s t (factsLeq fs) of
+        Left imp -> return ([imp], fs)
+        Right m  -> return ([], fs { factsLeq = m })
 
     _ -> return ([], fs { facts = insertProps f (facts fs) })
 
@@ -718,7 +741,9 @@ entailsSimple ps p =
             $ msum [ do (p1,proof) <- improved
                         return (YesIf [p1] proof)
 
-                   , do proof <- solve (facts ps) (goalProp p)
+                   , do proof <- case goalProp p of
+                                   Prop Leq [s,t] -> leqProve (factsLeq ps) s t
+                                   g -> solve (facts ps) g
                         return (YesIf [] proof)
                    ]
 
@@ -828,6 +853,9 @@ substToFacts (Subst m) = [ Fact { factProp  = Prop Eq [Var x, t]
                                 , factProof = ev
                                 } | (x,(t,ev)) <- M.toList m ]
 
+substDom :: Subst -> [Var]
+substDom (Subst m) = M.keys m
+
 emptySubst :: Subst
 emptySubst = Subst M.empty
 
@@ -836,11 +864,6 @@ isEmptySubst (Subst m) = M.null m
 
 singleSubst :: Var -> Term -> Proof -> Subst
 singleSubst x t e = Subst (M.singleton x (t,e))
-
-bindsSubst :: Var -> Term -> Subst -> Bool
-bindsSubst x t (Subst m) = case M.lookup x m of
-                             Nothing     -> False
-                             Just (t1,_) -> t == t1
 
 compose :: Subst -> Subst -> Subst
 compose s2@(Subst m2) (Subst m1) = Subst (M.union (M.mapWithKey ap2 m1) m2)
@@ -1040,6 +1063,21 @@ leqAddFact proof t1 t2 model =
          Fact { factProof = byLeqAsym t1 t2 proof pOp
               , factProp  = Prop Eq [t1,t2]
               }
+
+
+leqFactsAffectedBy :: LeqFacts -> Subst -> Bool
+leqFactsAffectedBy (LM m) = any affects . substDom
+  where affects x = case M.lookup (Var x) (fst (M.split (num 0) m)) of
+                      Nothing -> False
+                      _       -> True
+
+
+leqProve :: LeqFacts -> Term -> Term -> Maybe Proof
+leqProve model s t =
+  let (_,m1) = leqInsNode s model
+      (_,m2) = leqInsNode t m1
+  in leqReachable m2 s t
+
 
 --------------------------------------------------------------------------------
 
