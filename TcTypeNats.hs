@@ -16,6 +16,7 @@ Terms and Propositions
 -------------------------------------------------------------------------------}
 
 newtype Var = V Xi
+              deriving Show
 
 {- The 'Xi' in the 'Num' constructor stores the original 'Xi' type that
 gave rise to the number. It is there in an attempt to preserve type synonyms. -}
@@ -30,7 +31,7 @@ gave rise to the number. It is there in an attempt to preserve type synonyms. -}
 
 data Term = Var Var
           | Num Integer (Maybe Xi)
-            deriving (Eq,Ord)
+            deriving (Eq,Ord,Show)
 
 num :: Integer -> Term
 num n = Num n Nothing
@@ -247,9 +248,11 @@ be affected by the substitution). -}
                 )
 
     Prop Leq [s,t] ->
-      case leqAddFact (factProof f) s t (factsLeq fs) of
-        Left imp -> return ([imp], fs)
-        Right m  -> return ([], fs { factsLeq = m })
+      case leqAddFact (factProof f) s t fs of
+        Improved imp -> return ([imp], fs)
+        AlreadyKnown -> return ([], fs)
+        Inconsistent -> mzero
+        Added xs m   -> return (xs, m)
 
     _ -> return ([], fs { facts = insertProps f (facts fs) })
 
@@ -381,6 +384,7 @@ data Theorem  = AssumedFalse
 
 data Proof    = ByAsmp EvVar
               | Using Theorem [Term] [Proof]   -- Instantiation, sub-proofs
+                deriving Show
 
 byRefl :: Term -> Proof
 byRefl t = Using EqRefl [t] []
@@ -932,6 +936,7 @@ providing evidence of the relation between the terms.
 
 
 data LeqEdge = LeqEdge { leProof :: Proof, leTarget :: Term }
+               deriving Show
 
 instance Eq LeqEdge where
   x == y  = leTarget x == leTarget y
@@ -941,12 +946,13 @@ instance Ord LeqEdge where
 
 data LeqEdges = LeqEdges { lnAbove :: S.Set LeqEdge
                          , lnBelow :: S.Set Term
-                         }
+                         } deriving Show
 
 noLeqEdges :: LeqEdges
 noLeqEdges = LeqEdges { lnAbove = S.empty, lnBelow = S.empty }
 
 newtype LeqFacts = LM (M.Map Term LeqEdges)
+                   deriving Show
 
 noLeqFacts :: LeqFacts
 noLeqFacts = LM M.empty
@@ -990,18 +996,58 @@ leqReachable m smaller larger =
           in search vis (notDone new `S.union` notDone rest)
 
 
+
+
+{-
+
+This diagram illustrates what we do when we link two nodes (leqLink).
+
+We start with a situation like on the left, and we are adding an
+edge from L to U.  The final result is illustrated on the right.
+
+   Before    After
+
+     a         a
+    /|        /
+   / |       /
+  U  |      U\
+  |  L        \L
+  | /         /
+  |/         /
+  d         d
+
+L: lower
+U: upper
+a: a member of "lnAbove uedges"  (uus)
+d: a member of "lnBelow ledges"  (lls)
+-}
+
+
+
 leqLink :: Proof -> (Term,LeqEdges) -> (Term,LeqEdges) -> LeqFacts ->
                                                   (LeqEdges,LeqEdges,LeqFacts)
+
 leqLink proof (lower, ledges) (upper, uedges) (LM m) =
 
-  let newLedges   = ledges { lnAbove = S.insert (LeqEdge { leProof  = proof
-                                                         , leTarget = upper
-                                                         }) (lnAbove ledges) }
-      newUedges   = uedges { lnBelow = S.insert lower (lnBelow uedges) }
+  let uus         = S.mapMonotonic leTarget (lnAbove uedges)
+      lls         = lnBelow ledges
+
+      newLedges   = ledges { lnAbove =
+                               S.insert (LeqEdge { leProof  = proof
+                                                 , leTarget = upper
+                                                 })
+                               $ S.filter (not . (`S.member` uus) . leTarget)
+                               $ lnAbove ledges
+                           }
+      newUedges   = uedges { lnBelow =
+                               S.insert lower
+                               $ S.filter (not . (`S.member` lls))
+                               $ lnBelow uedges
+                           }
 
       delU        = (/= upper) . leTarget
-      adjAbove    = M.adjust $ \e -> e { lnAbove = S.filter delU  (lnAbove e) }
-      adjBelow    = M.adjust $ \e -> e { lnBelow = S.delete lower (lnBelow e) }
+      adjAbove    = M.adjust (\e -> e { lnAbove = S.filter delU  (lnAbove e) })
+      adjBelow    = M.adjust (\e -> e { lnBelow = S.delete lower (lnBelow e) })
       fold f xs x = S.fold f x xs
 
   in ( newLedges
@@ -1012,7 +1058,6 @@ leqLink proof (lower, ledges) (upper, uedges) (LM m) =
           $ fold adjBelow (S.mapMonotonic leTarget (lnAbove uedges))
             m
      )
-
 
 leqInsNode :: Term -> LeqFacts -> (LeqEdges, LeqFacts)
 leqInsNode t model@(LM m0) =
@@ -1046,20 +1091,24 @@ leqInsNode t model@(LM m0) =
                    _       -> Nothing
 
 
-leqAddFact :: Proof -> Term -> Term -> LeqFacts -> Either Fact LeqFacts
-leqAddFact proof t1 t2 model =
-  let (n1,m1)   = leqInsNode t1 model
+leqAddFact :: Proof -> Term -> Term -> Facts -> AddFact
+leqAddFact proof t1 t2 fs =
+  let m0        = factsLeq fs
+      (n1,m1)   = leqInsNode t1 m0
       (n2,m2)   = leqInsNode t2 m1
 
   in case leqReachable m2 t2 t1 of
 
        Nothing ->
-         let (_,_,m3) = leqLink proof (t1,n1) (t2,n2) m2
-         in Right m3
+
+         case leqReachable m2 t1 t2 of
+           Nothing -> let (_,_,m3) = leqLink proof (t1,n1) (t2,n2) m2
+                      in Added [] fs { factsLeq = m3 }
+           Just _  -> AlreadyKnown
 
        {- We know the opposite: we don't add the fact
           but propose an equality instead. -}
-       Just pOp -> Left $
+       Just pOp -> Improved $
          Fact { factProof = byLeqAsym t1 t2 proof pOp
               , factProp  = Prop Eq [t1,t2]
               }
@@ -1440,6 +1489,8 @@ instance PP SolverProps where
 instance PP Facts where
   pp fs = vcat (map pp (factsToList fs))
 
+instance PP LeqFacts where
+  pp = vcat . map pp . leqFactsToList
 
 
 {-------------------------------------------------------------------------------
