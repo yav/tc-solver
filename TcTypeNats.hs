@@ -357,22 +357,26 @@ Proofs and Theorems
 -------------------------------------------------------------------------------}
 
 data Theorem  = AssumedFalse
-              | EqRefl      -- forall a. a = a
-              | EqSym       -- forall a b. (a = b) => b = a
-              | EqTrans     -- forall a b c. (a = b, b = c) => a = c
+              | EqRefl      -- forall a.                        a = a
+              | EqSym       -- forall a b.   (a = b)         => b = a
+              | EqTrans     -- forall a b c. (a = b, b = c)  => a = c
               | Cong Pred   -- forall xs ys. (xs = ys, F xs) => F ys
-              | AddLeq
-              | MulLeq
-              | ExpLeq1
-              | ExpLeq2
+
+              | LeqRefl     -- forall a.                         a <= a
+              | LeqAsym     -- forall a b.   (a <= b, b <= a) => a = b
+              | LeqTrans    -- forall a b c. (a <= b, b <= c) => a <= c
+              | Leq0        -- forall a.                         0 <= a
+
               | DefAdd Integer Integer Integer
               | DefMul Integer Integer Integer
               | DefExp Integer Integer Integer
               | DefLeq Integer Integer
-              | LeqRefl
-              | LeqAsym
-              | LeqTrans
-              | Leq0 | Add0 | Mul0 | Mul1 | Root0 | Root1 | Log1
+
+              | AddLeq
+              | MulLeq
+              | ExpLeq1
+              | ExpLeq2
+              | Add0 | Mul0 | Mul1 | Root0 | Root1 | Log1
               | AddComm | MulComm
               | SubL | SubR | DivL | DivR | Root | Log
               | MulGrowL | MulGrowR | ExpGrow
