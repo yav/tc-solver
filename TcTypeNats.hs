@@ -425,6 +425,9 @@ byLeqTrans t1 t2 t3 p1 p2 = Using LeqTrans [t1,t2,t3] [p1,p2]
 byLeqAsym :: Term -> Term -> Proof -> Proof -> Proof
 byLeqAsym t1 t2 p1 p2 = Using LeqAsym [t1,t2] [p1,p2]
 
+byLeq0 :: Term -> Proof
+byLeq0 t = Using Leq0 [t] []
+
 
 -- (x1 = y1, x2 = y2, P x1 x2) => P y1 y2
 byCong :: Pred -> [Term] -> [Proof] -> Proof -> Proof
@@ -970,6 +973,7 @@ leqFactsToList (LM m) =
      return Fact { factProof = leProof edge, factProp = Prop Leq [ from, to ] }
 
   where triv (Num {}) (Num {}) = True
+        triv (Num 0 _) _       = True
         triv _       _         = False
 
 leqImmAbove :: LeqFacts -> Term -> S.Set LeqEdge
@@ -1071,7 +1075,12 @@ leqInsNode t model@(LM m0) =
       let new           = noLeqEdges
           ans1@(es1,m1) = ( new, LM (M.insert t new m0) )
       in case t of
-           Var _ -> ans1
+           Var _ ->
+             -- link to 0
+             let zero         = num 0
+                 (zes,zm)     = leqInsNode zero m1    -- Should not modify es1
+                 (_, es2, m2) = leqLink (byLeq0 t) (zero,zes) (t,es1) zm
+             in (es2, m2)
            Num m _ ->
              -- link to a smaller constnat, if any
              let ans2@(es2, m2) =
