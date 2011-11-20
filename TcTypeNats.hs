@@ -131,8 +131,22 @@ chooseProp ps =
 getPropsFor :: Pred -> Props a -> [a]
 getPropsFor op (P ps) = S.toList (M.findWithDefault S.empty op ps)
 
-getPropsForRaw :: Pred -> Props Fact -> [([Term],Proof)]
-getPropsForRaw p ps = [ (propArgs q, factProof q) | q <- getPropsFor p ps ]
+-- | Like 'getPropsFor' but selecting 2 distinct propositions at a time.
+-- We return all permutations of the proporsitions.
+getPropsFor2 :: Pred -> Props a -> [(a,a)]
+getPropsFor2 op ps =
+  do (a,as) <- choose $ getPropsFor op ps
+     b      <- as
+     return (a,b)
+
+-- | Like 'getPropsFor' but selecting 3 distinct propositions at a time.
+-- We return all permutations of the proporsitions.
+getPropsFor3 :: Pred -> Props a -> [(a,a,a)]
+getPropsFor3 op ps =
+  do (a,as) <- choose $ getPropsFor op ps
+     (b,bs) <- choose as
+     c      <- bs
+     return (a,b,c)
 
 
 -- | Returns 'True' if the set is empty.
@@ -274,6 +288,11 @@ addFact fact0 cur_known =
         then Improved fact
         else case solve (facts cur_known) (factProp fact) of
                Just _ -> AlreadyKnown
+
+
+-- XXX: Actually, if the LEQ model changes, we have to check
+-- for any new interactions between existing members of the 
+-- inert set.
 
 {- NOTE: We don't keep the set of known facts fully "minimal".
 If we wanted to do this, we'd have to remove existing facts that
@@ -1151,6 +1170,7 @@ byAsmp :: Props Fact -> Prop -> Maybe Proof
 byAsmp ps p =
   do q <- find (\x -> propArgs x == propArgs p) $ getPropsFor (propPred p) ps
      return (factProof q)
+
 
 
 {-------------------------------------------------------------------------------

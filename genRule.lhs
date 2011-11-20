@@ -238,15 +238,12 @@ Definition schemas for basic functions and relations
 >   [ rule "DefAdd" (x  +  y === z)
 >   , rule "DefMul" (x  *  y === z)
 >   , rule "DefExp" (x ^^^ y === z)
->   , rule "DefLeq" (x <== y)
 >   ]
 >   where x : y : z : _ = srcOfVars NV 0
 
 > simpleRules :: [Rule]
 > simpleRules = commuteConcs $ map toSimpleRule $
->   [ rule "LeqRefl" (x <== x)
->   , rule "Leq0"    (0 <== x)
->   , rule "Add0"    (x  +  0  === x)
+>   [ rule "Add0"    (x  +  0  === x)
 >   , rule "Mul0"    (x  *  0  === 0)
 >   , rule "Mul1"    (x  *  1  === x)
 >   , rule "Root0"   (x ^^^ 0  === 1)
@@ -283,8 +280,6 @@ Commutativity
 >     , aRule "Root"     [ x1 ^^^ y  === x2 ^^^ y,  1 <== y ] (x1 === x2)
 >     , aRule "Log"      [ x  ^^^ y1 === x  ^^^ y2, 2 <== x ] (y1 === y2)
 >     , aRule "ExpGrow"  [ x  ^^^ y  === y                  ] (x  === 1)
->     , aRule "LeqTrans" [ x <== y, y <== z ]                 (x <== z)
->     , aRule "LeqAsym"  [ x <== y, y <== x ] (x === y)
 >     ]
 >     )
 >   where
@@ -838,7 +833,7 @@ Showing
 
 == Eliminating Non-linear Patterns ==
 
-The goal here is to replace repeated variables with explicit equatiuns.
+The goal here is to replace repeated variables with explicit equations.
 This is useful when we intend to use a rule as a Haskell pattern.
 
 For example:
@@ -850,7 +845,7 @@ becomes
 x + 0 = x' | x == x'
 
 
-> data PatS = PatS { patProps  :: [Prop]            -- Equations between vars
+> data PatS = PatS { patProps  :: [Prop]          -- Equations between vars
 >                  , patKnown :: [Var]            -- Bound vars
 >                  }
 >
@@ -943,7 +938,7 @@ They combine the existing assumptions with the new fact to derive more facts.
 >   { fPats   :: Props        -- Existing assumptions
 >   , fAdding :: (Int,Prop)   -- New assumption, and it's position in arg
 >   , fGuards :: [ Guard ]    -- Side conditions
->   , fBoringGs :: [ Guard ]  -- Uninteresting equality side conditions
+>   , fBoringGs :: [ Guard ]  -- Uninteresting equality side conditions(for lin)
 >   , fNew    :: Prop         -- Derived fact
 >   , fProof  :: Proof        -- Proof of the derived fact
 >   , fNotes  :: Doc          -- Additional comments
@@ -953,7 +948,7 @@ They combine the existing assumptions with the new fact to derive more facts.
 "Backward" rules are used to solve a goal, from a set of assumptions.
 
 > data BRule = BRule
->   { bPats     :: [ Prop ]   -- Existing assumptions
+>   { bPats     :: [ Prop ]   -- Existing assumptions, XXX: broken when not []
 >   , bGuards   :: [ Guard ]  -- Side conditions
 >   , bBoringGs :: [ Guard ]  -- Uninteresting equality side conditions
 >   , bProof    :: Proof      -- Proof for the new fact
@@ -1161,19 +1156,32 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > wildPat = char '_'
 >
 > tuplePat :: [Pat] -> Pat
-> tuplePat ps = parens $ fsep $ punctuate comma ps
+> tuplePat [p]  = p
+> tuplePat ps   = parens $ fsep $ punctuate comma ps
 >
 > listPat :: [Pat] -> Pat
 > listPat = smallList
 
-> smallList :: [Doc] -> Doc
-> smallList = brackets . hsep . punctuate comma
+> type Exp = Doc
 
-> bigList :: [Doc] -> Doc
-> bigList [] = text "[]"
-> bigList (x : xs) = (text "[" <+> x) $$
->                   vcat [ comma <+> y | y <- xs ] $$
->                   text "]"
+> tupleExp :: [Exp] -> Exp
+> tupleExp [e]  = e
+> tupleExp es   = parens $ fsep $ punctuate comma es
+>
+> caseExp :: Exp -> [Doc] -> Exp
+> caseExp e as = (text "case" <+> e <+> text "of") $$ nest 2 (vcat as)
+>
+> caseAlt :: Pat -> Exp -> Doc
+> caseAlt p e = guardedCaseAlt p empty e
+>
+> doExp :: [Exp] -> Exp
+> doExp ss = text "do" <+> vcat ss
+>
+> guardedCaseAlt :: Pat -> Doc -> Exp -> Doc
+> guardedCaseAlt p gs e = hang p 2 $ hang gs 2 $ text "->" <+> e
+>
+> letExp :: [Doc] -> Exp -> Exp
+> letExp ds e = text "let" $$ nest 2 (vcat ds) $$ text "in" <+> e
 
 > ppGuards :: [Guard] -> [Guard] -> Doc
 > ppGuards bore gs =
@@ -1212,8 +1220,11 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >   case t of
 >     Var x | not (numV x) -> text (show x)
 >     _ -> parens (text "num" <+> text (show t))
->
-> eqnToExpr :: (Int -> Maybe Int) -> Proof -> Prop -> Doc
+
+
+
+> -- Make a "Fact" value.
+> eqnToExpr :: (Int -> Maybe Doc) -> Proof -> Prop -> Doc
 > eqnToExpr lkpParam p (Prop op ts) =
 >     text "Fact" <+>
 >       (text "{" <+> text "factProof =" <+> proofToExpr lkpParam p
@@ -1221,14 +1232,14 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >                                   <+> smallList (map toExpr ts)
 >       $$ text "}")
 >
-> proofToExpr :: (Int -> Maybe Int) -> Proof -> Doc
+> proofToExpr :: (Int -> Maybe Doc) -> Proof -> Doc
 > proofToExpr lkp (By x ts ps) =
 >   hang (text "Using" <+> ppTheorem x <+> smallList (map toExpr ts)) 2
 >        (bigList (map (proofToExpr lkp) ps))
 > proofToExpr lkp (ByAsmp m) =
 >   case lkp m of
->     Nothing -> text "new_proof"
->     Just n  -> text "proof" <> int n
+>     Nothing -> parens $ text "factProof" <+> newFactName
+>     Just n  -> n
 >
 > bruleToAlt :: BRule -> Doc
 > bruleToAlt r = text "{-" <+> bNotes r <+> text "-}"
@@ -1275,6 +1286,12 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 
 > type FRulesForOp = M.Map [(Op,Int)] [FRule]
 
+
+Group rules like this:
+
+  1. Group by the predicate of the new proposition that is being added.
+  2. Then, group those rules by the shapes of their assumptions.
+
 > groupFRules :: [FRule] -> M.Map Op FRulesForOp
 > groupFRules = M.map byAsmps . foldr addHead M.empty
 >   where
@@ -1296,124 +1313,89 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 
 --------------------------------------------------------------------------------
 
+Here is how we generate code for forward reasoning.
 
-The code bellow generates functions of this form:
 
--- Used when the new fact is (Add t1 t2 t3), and the assumptions
--- have 2 Add, and 1 Mul.
-frule_Add_2_1_0_0_0 t1 t2 t3 =
-  do ((x0,x1,x2),add1) <- choose (pAdd props)
-     (x3,x4,x5)        <- add1
-     (x6,x7,x8)        <- pMul props
-     concat [ case (t1,t2,t3,x0,x1,x2,x3,..)
-                  (q1,q2,q3,p0,p1,p2,p3,...)
-                    | sides -> [ rhs ]
-                  _         -> []
-            , case ...
-            ]
-
+> fruleAsmpsName = text "props"
+> newFactName    = text "newFact"
 
 > codeFRules :: M.Map Op (M.Map [(Op,Int)] [FRule]) -> Doc
 > codeFRules m =
 >   text "implied :: Props Fact -> Fact -> [Fact]" $$
->   text "implied" <+> fruleAsmpsName <+> text "newProp ="
->     $$ nest 2 (text "let new_proof = factProof newProp in"
->                 $$ text "case factProp newProp of" $$
->   nest 2 (vcat (map cases (M.toList m)) $$ text "_ -> []"))
+>   text "implied" <+> fruleAsmpsName <+> newFactName <+> text "=" $$
+>   (nest 2 $ caseExp (text "factProp" <+> newFactName)
+>           $ map cases (M.toList m) ++ [caseAlt wildPat (text "mzero")])
 >   where
 >   cases (op,m1) =
->     let eqn = Prop op (take ar $ map (Var . V . fruleVar) [ 0 .. ])
->         ar  = arity op
->     in eqnToPat eqn <+> text "->" <+> text "concat"
->        $$ nest 2 (bigList
->                  $ do (_,rs) <- M.toList m1
->                       return $ text "do" <+>
->                         ( codeMatchProps ar (fPats (head rs))
->                           $$ text "concat" <+> bigList (map fruleCase rs)
->                         )
->                  )
+>     hang (conPat "Prop" [ conPat (opCon op) [], wildPat ]
+>               <+> text "->" <+> text "concat") 2 $
+>     bigList $ do (spec,rs) <- M.toList m1
+>                  return $ doExp [ getAsmps spec
+>                                 , hang (text "concat") 2 $
+>                                     bigList (map fireFRule rs)
+>                                 ]
 
 
-> fruleOrder :: [Op]
-> fruleOrder = [ Add, Mul, Exp, Leq, Eq ]
+
+Generate a code fragment like this:
+
+   fMul1         <- getPropsFor Mul asmps
+   (fAdd1,fAdd2) <- getPropsFor2 Add asmps
+
+This is the first phase in checking if a rule fires.
+
+> asmpName :: Op -> Int -> Doc
+> asmpName op n = char 'f' <> text (opCon op) <> int n
 >
-> fruleVar :: Int -> String
-> fruleVar n  = "arg" ++ show n
+> getAsmps1 :: Op -> Int -> Doc
+> getAsmps1 op howMany
+>   | howMany == 0      = empty
+>   | otherwise         = tuplePat (map (asmpName op) [ 1 .. howMany ])
+>                       <+> text "<-"
+>                       <+> fun <+> text (opCon op) <+> fruleAsmpsName
 >
-> fruleAsmpsName :: Doc
-> fruleAsmpsName = text "props"
+>     where fun = text "getPropsFor" <> (if howMany == 1 then empty
+>                                                        else int howMany)
 >
-> fruleCase :: FRule -> Doc
-> fruleCase r =
->      ptext "{-" <+> fNotes r <+> text "-}"
->   $$ text "case" <+> vars <+> text "of"
->   $$ nest 2 ( tuplePat pats $$ nest 2 (ppGuards (fBoringGs r) (fGuards r)
->                             <+> text "-> return"
->                             $$ nest 2 (eqnToExpr getProofParam (fProof r) (fNew r)))
->               $$ text "_ -> mzero"
->             )
+> getAsmps :: [(Op,Int)] -> Doc
+> getAsmps spec = vcat [ getAsmps1 op n | (op,n) <- spec ]
+
+
+Generate code, checking if a rule should fire:
+
+    case (propArgs  newProp")t "Prop" [ conPat (opCon op) []
+>                                       , listPat (map termToPat ts)
+>                                       ]
+newProp, propArgs fMul1, propArgs fAdd1, propArgs fAdd2) of
+      ([a,b,c], [(x,y,z)], etc...)
+        | ... linearity guards (boring) ...
+        , ... side condition guards ...
+        , ... ordering guards ....
+          -> return Fact { ... }
+      _ -> mzero
+
+> fireFRule :: FRule -> Doc
+> fireFRule rule =
+>   ptext "{-" <+> fNotes rule <+> text "-}" $$
+>   caseExp (tupleExp (text "propArgs" <+> newFactName : terms))
+>     [ guardedCaseAlt
+>         (tuplePat ((mkPats $ pArgs $ snd $ fAdding rule) : pats))
+>         (ppGuards (fBoringGs rule) (fGuards rule))    -- XXX: Add ordering
+>         (hang (text "return") 2
+>               (eqnToExpr (`lookup` proofs) (fProof rule) (fNew rule)))
+>     , caseAlt wildPat $ text "mzero"
+>     ]
 >   where
->   vars       = parens $ fsep $ punctuate comma
->                       $ take (length pats) $ map (text . fruleVar) [ 0 .. ]
->   pats       = map termToPat $ pArgs (snd $ fAdding r) ++ paramPats
+>   (terms,pats,proofs) = unzip3 $
+>      [ (text "propArgs" <+> asmp, mkPats terms, entry)
+>        | (op,need)               <- M.toList (fPats rule)
+>        , (num, (proofId, terms)) <- zip [1 .. ] need
 >
->   (paramProofMap, paramPats)  = let (_, res) = mapAccumL doOp 1 fruleOrder
->                                     (ms,ps)  = unzip res
->                                 in (concat ms, concat ps)
+>        ,  let asmp   = asmpName op num
+>               entry  = (proofId, parens (text "factProof" <+> asmp))
+>      ]
 >
->   doOp s op   = case M.lookup op (fPats r) of
->                   Nothing -> (s, ([],[]))
->                   Just ts -> ( s + length ts
->                              , let (ns,ps) = unzip ts
->                                in (zip ns [ s .. ], concat ps) )
->
->   getProofParam n
->     | n == fst (fAdding r) = Nothing
->     | otherwise =
->        case lookup n paramProofMap of
->          Just m  -> Just m
->          Nothing -> error
->                $ unlines ("incomplete proof"
->                          : show (ppProof (fProof r))
->                          : ("adding: " ++ show (fst (fAdding r)))
->                          : map show paramProofMap
->                          )
-
-
-
-
-Generates code search for assumptions of the appropriate "shape"
-(i.e., just based on the predicate, not the predicate's arguments.)
-
-> codeMatchProps :: Int -> Props -> Doc
-> codeMatchProps ar0 m = vcat $ snd $ mapAccumL doOp (ar0,1) fruleOrder
->   where
->   doOp s op = case M.lookup op m of
->                 Nothing -> (s, empty)
->                 Just ts -> step op (length ts) s
->
->   step op howMany s0 = gen howMany initSrc s0
->     where
->     initSrc   = parens (text "getPropsForRaw" <+> con <+> fruleAsmpsName)
->     nextSrc n = text "more" <> con <> int (howMany - n + 1)
->
->     pats (n,pn) = tuplePat
->                     [ listPat $ take ar [ text (fruleVar v) | v <- [ n .. ] ]
->                     , text "proof" <> int pn
->                     ]
->
->     gen 0 _  s          = (s, empty)
->     gen 1 src s@(vs,ps) = ((vs + ar, ps + 1), pats s <+> text "<-" <+> src)
->     gen n src s@(vs,ps) = let newSrc = nextSrc n
->                               (vs1, stmts) = gen (n-1) newSrc (vs+ar,ps+1)
->                    in ( vs1
->                       , tuplePat [pats s, newSrc] <+>
->                           text "<-" <+> text "choose" <+> src $$ stmts
->                       )
->     ar  = arity op
->     con = text (opCon op)
-
-
+>   mkPats ts = listPat (map termToPat ts)
 
 --------------------------------------------------------------------------------
 
@@ -1422,6 +1404,17 @@ Generates code search for assumptions of the appropriate "shape"
 
 > vsep :: [Doc] -> Doc
 > vsep = vcat . intersperse (text " ")
+>
+> smallList :: [Doc] -> Doc
+> smallList = brackets . hsep . punctuate comma
+>
+> bigList :: [Doc] -> Doc
+> bigList [] = text "[]"
+> bigList (x : xs) = (text "[" <+> x) $$
+>                   vcat [ comma <+> y | y <- xs ] $$
+>                   text "]"
+
+
 >
 > groupLens :: (a -> [b]) -> [a] -> [(Int,[a])]
 > groupLens pats = map rearrange . groupBy same . sortBy comp . map addLen
