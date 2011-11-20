@@ -305,7 +305,7 @@ because we can improve facts only so much before thet are full instantiated.
                Nothing ->
                  case insertImpFact fact cur_known of
                    Just (new,ok) -> Added (new ++
-                                            implied (facts cur_known) fact) ok
+                                            implied cur_known fact) ok
                    Nothing -> Inconsistent
 
 

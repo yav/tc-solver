@@ -877,6 +877,7 @@ x + 0 = x' | x == x'
 >   nonLin (App op t1 t2)= App op `fmap` nonLin t1 `ap` nonLin t2
 >
 > instance NonLin Prop where
+>   nonLin p@(Prop Leq _) = return p
 >   nonLin (Prop op ts) = Prop op `fmap` mapM nonLin ts
 >
 > rmNonLin :: NonLin a => (a -> [Prop] -> b) -> a -> b
@@ -1080,6 +1081,7 @@ be defined in terms of variables in "R" and "r".
 > toFRule :: Rule -> [FRule]
 > toFRule r =
 >   do (e,rs) <- choose $ zip [ 0 .. ] (rAsmps r)
+>      guard (notLeq e)
 >      gs <- maybeToList
 >          $ resolveGuards (fvs (snd e,map snd rs))
 >                          (fvs (rConc r))
@@ -1094,6 +1096,7 @@ be defined in terms of variables in "R" and "r".
 >                   , fNotes  = text "Adding" <+> int (fst e)
 >                            $$ ppLongRule r
 >                   }
+>   where notLeq (_,Prop x _) = x /= Leq
 
 
 Convert a rule into one suitable for backward reasoning (i.e., solving things).
@@ -1183,9 +1186,9 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > letExp :: [Doc] -> Exp -> Exp
 > letExp ds e = text "let" $$ nest 2 (vcat ds) $$ text "in" <+> e
 
-> ppGuards :: [Guard] -> [Guard] -> Doc
-> ppGuards bore gs =
->   case (map pp bore, map pp gs) of
+> ppGuards :: [Guard] -> [Guard] -> [Doc] -> Doc
+> ppGuards bore gs ords =
+>   case (map pp bore, map pp gs ++ ords) of
 >     ([], []) -> empty
 >     ([], is) -> interesting (char '|') is
 >     (bs, is) -> boring bs $$ interesting comma is
@@ -1244,7 +1247,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > bruleToAlt :: BRule -> Doc
 > bruleToAlt r = text "{-" <+> bNotes r <+> text "-}"
 >               $$ eqnsToPat (bNew r : bPats r)
->               $$ nest 2 (ppGuards (bBoringGs r) (bGuards r)
+>               $$ nest 2 (ppGuards (bBoringGs r) (bGuards r) []
 >               $$ text "->" <+> text "Just" <+>
 >                     parens (proofToExpr bindAsmps (bProof r)))
 >   where bindAsmps _ = Nothing -- XXX: Implement this to use brules with
@@ -1321,7 +1324,7 @@ Here is how we generate code for forward reasoning.
 
 > codeFRules :: M.Map Op (M.Map [(Op,Int)] [FRule]) -> Doc
 > codeFRules m =
->   text "implied :: Props Fact -> Fact -> [Fact]" $$
+>   text "implied :: Facts -> Fact -> [Fact]" $$
 >   text "implied" <+> fruleAsmpsName <+> newFactName <+> text "=" $$
 >   (nest 2 $ caseExp (text "factProp" <+> newFactName)
 >           $ map cases (M.toList m) ++ [caseAlt wildPat (text "mzero")])
@@ -1348,11 +1351,13 @@ This is the first phase in checking if a rule fires.
 > asmpName op n = char 'f' <> text (opCon op) <> int n
 >
 > getAsmps1 :: Op -> Int -> Doc
+> getAsmps1 Leq _ = empty
 > getAsmps1 op howMany
 >   | howMany == 0      = empty
 >   | otherwise         = tuplePat (map (asmpName op) [ 1 .. howMany ])
 >                       <+> text "<-"
->                       <+> fun <+> text (opCon op) <+> fruleAsmpsName
+>                       <+> fun <+> text (opCon op) <+>
+>                           parens (text "facts" <+> fruleAsmpsName)
 >
 >     where fun = text "getPropsFor" <> (if howMany == 1 then empty
 >                                                        else int howMany)
@@ -1361,18 +1366,7 @@ This is the first phase in checking if a rule fires.
 > getAsmps spec = vcat [ getAsmps1 op n | (op,n) <- spec ]
 
 
-Generate code, checking if a rule should fire:
-
-    case (propArgs  newProp")t "Prop" [ conPat (opCon op) []
->                                       , listPat (map termToPat ts)
->                                       ]
-newProp, propArgs fMul1, propArgs fAdd1, propArgs fAdd2) of
-      ([a,b,c], [(x,y,z)], etc...)
-        | ... linearity guards (boring) ...
-        , ... side condition guards ...
-        , ... ordering guards ....
-          -> return Fact { ... }
-      _ -> mzero
+Generate code, checking if a rule should fire
 
 > fireFRule :: FRule -> Doc
 > fireFRule rule =
@@ -1380,19 +1374,32 @@ newProp, propArgs fMul1, propArgs fAdd1, propArgs fAdd2) of
 >   caseExp (tupleExp (text "propArgs" <+> newFactName : terms))
 >     [ guardedCaseAlt
 >         (tuplePat ((mkPats $ pArgs $ snd $ fAdding rule) : pats))
->         (ppGuards (fBoringGs rule) (fGuards rule))    -- XXX: Add ordering
+>         (ppGuards (fBoringGs rule) (fGuards rule) leqGuards)
 >         (hang (text "return") 2
->               (eqnToExpr (`lookup` proofs) (fProof rule) (fNew rule)))
+>               (eqnToExpr (`lookup` allProofs) (fProof rule) (fNew rule)))
 >     , caseAlt wildPat $ text "mzero"
 >     ]
 >   where
+>   allProofs = proofs ++ leqProofs
+>
 >   (terms,pats,proofs) = unzip3 $
 >      [ (text "propArgs" <+> asmp, mkPats terms, entry)
 >        | (op,need)               <- M.toList (fPats rule)
+>        , op /= Leq               -- handled specially, see bellow
 >        , (num, (proofId, terms)) <- zip [1 .. ] need
 >
 >        ,  let asmp   = asmpName op num
 >               entry  = (proofId, parens (text "factProof" <+> asmp))
+>      ]
+>
+>   (leqProofs, leqGuards) = unzip $
+>      [ (entry, expr)
+>        | (proofId, [t1,t2]) <- M.findWithDefault [] Leq (fPats rule)
+>        , let name   = text "leqp" <> int proofId
+>              model  = parens (text "factsLeq" <+> fruleAsmpsName)
+>              expr   = text "Just" <+> name <+> text "<-" <+>
+>                       text "leqProve" <+> model <+> toExpr t1 <+> toExpr t2
+>              entry  = (proofId, name)
 >      ]
 >
 >   mkPats ts = listPat (map termToPat ts)
