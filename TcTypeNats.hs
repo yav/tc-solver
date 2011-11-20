@@ -227,49 +227,26 @@ noFacts :: Facts
 noFacts = Facts { facts = noProps, factsEq = emptySubst, factsLeq = noLeqFacts }
 
 insertFact :: Fact -> Facts -> Maybe ([Fact],Facts)
-insertFact f fs = insertImpFact (impFact (factsEq fs) f) fs
+insertFact f fs = case insertImpFact (impFact (factsEq fs) f) fs of
+                    Inconsistent -> Nothing
+                    AlreadyKnown -> Just ([], fs)
+                    Improved f1  -> Just ([f1], fs)
+                    Added xs fs1 -> Just (xs, fs1)
 
 
 {- NOTE: This function assumes that the substition from the facts has
 already been applied to the new fact.  It can be used as an optimization to
 avoid applying the substitution twice. -}
 
-insertImpFact :: Fact -> Facts -> Maybe ([Fact],Facts)
+insertImpFact :: Fact -> Facts -> AddFact
 insertImpFact f fs =
   case factProp f of
-    Prop Eq [s,t] ->
-      do su <- mgu (factProof f) s t
-         let improve fact = case impFactChange su fact of
-                              (_,False) -> Nothing
-                              (fact1,_) -> Just fact1
-             (changed,remain) = mapExtract improve (facts fs)
-
-{- Check if we need to rebuild the order model.  Currently, we rebuild the
-entire model if anything in it will change.  It may be possible to avoid
-some of this work (e.g., by computing parts of the model that would not
-be affected by the substitution). -}
-
-             (changedLeq, remainLeq) =
-               if leqFactsAffectedBy (factsLeq fs) su
-                  then (leqFactsToList (factsLeq fs), noLeqFacts)
-                  else ([],                           factsLeq fs)
-
-         return ( changedLeq ++ changed
-                , Facts { facts     = remain
-                        , factsLeq  = remainLeq
-                        , factsEq   = compose su (factsEq fs)
-                        }
-                )
-
-    Prop Leq [s,t] ->
-      case leqAddFact (factProof f) s t fs of
-        Improved imp -> return ([imp], fs)
-        AlreadyKnown -> return ([], fs)
-        Inconsistent -> mzero
-        Added xs m   -> return (xs, m)
-
-    _ -> return ([], fs { facts = insertProps f (facts fs) })
-
+    Prop Eq  [s,t] -> eqAddFact  (factProof f) s t fs
+    Prop Leq [s,t] -> leqAddFact (factProof f) s t fs
+    _ ->
+      case solve (facts fs) (factProp f) of
+        Just _ -> AlreadyKnown
+        _      -> Added (implied fs f) fs { facts = insertProps f (facts fs) }
 
 {- 'addFact' is simillar to 'insertFact' but it returns a bit more detail
 about what happened.  In particular, if the fact is actually to be added
@@ -286,28 +263,7 @@ addFact fact0 cur_known =
   let (fact,changed) = impFactChange (factsEq cur_known) fact0
   in if changed
         then Improved fact
-        else case solve (facts cur_known) (factProp fact) of
-               Just _ -> AlreadyKnown
-
-
--- XXX: Actually, if the LEQ model changes, we have to check
--- for any new interactions between existing members of the 
--- inert set.
-
-{- NOTE: We don't keep the set of known facts fully "minimal".
-If we wanted to do this, we'd have to remove existing facts that
-can be solved in terms of the new fact.  However, if the fact improved
-some exisiting facts, those are removed from the inert set and the
-improved facts are added as new work to be considered.  This process stops
-because we can improve facts only so much before thet are full instantiated.
--}
-
-               Nothing ->
-                 case insertImpFact fact cur_known of
-                   Just (new,ok) -> Added (new ++
-                                            implied cur_known fact) ok
-                   Nothing -> Inconsistent
-
+        else insertImpFact fact cur_known
 
 {- Add a fact and all the facts that follow from it.  The arguments are
 ordered like this so that the function can be used conveniently with 'foldM'. -}
@@ -328,12 +284,16 @@ Furthermore, improvements "restart" so we do less work if we do equalities
 first. -}
 
 addFactsTrans' :: Facts -> [Fact] -> Maybe Facts
-addFactsTrans' fs = foldM addFactTrans fs . reorder [] []
-  where reorder eqs others [] = eqs ++ others
-        reorder eqs others (e : es) =
-          case factProp e of
-            Prop Eq _ -> reorder (e : eqs) others es
-            _         -> reorder eqs (e : others) es
+addFactsTrans' fs work = foldM addFactTrans fs (eqs ++ leqs ++ others)
+  where
+  (eqs,leqs,others) = reorder work
+
+  reorder []       = ([],[],[])
+  reorder (p : ps) = let (es,ls,os) = reorder ps
+                     in case propPred p of
+                          Eq  -> (p:es,ls,os)
+                          Leq -> (es,p:ls,os)
+                          _   -> (es,ls,p:os)
 
 addFactsTrans :: Facts -> [Fact] -> Maybe Facts
 addFactsTrans fs facts0 =
@@ -900,12 +860,42 @@ compose s2@(Subst m2) (Subst m1) = Subst (M.union (M.mapWithKey ap2 m1) m2)
   where ap2 x (t,p1) = let (t2,p2) = apSubst s2 t
                        in (t2, byTrans (Var x) t t2 p1 p2)
 
--- For simple terms no need to occur check
-mgu :: Proof -> Term -> Term -> Maybe Subst
-mgu _ x y | x == y   = return emptySubst
-mgu ev (Var x) t     = return (singleSubst x t ev)
-mgu ev t (Var x)     = return (singleSubst x t ev)
-mgu _ _ _            = mzero
+eqAddFact :: Proof -> Term -> Term -> Facts -> AddFact
+eqAddFact eq t1 t2 fs =
+  case (t1, t2) of
+    _ | t1 == t2      -> AlreadyKnown
+
+    (Num {}, Num {})  -> Inconsistent
+
+    (Var x, Num {})   -> eqBindVar eq x t2 fs
+
+    (Var x, _)
+      | not (leqContains (factsLeq fs) t1) -> eqBindVar eq x t2 fs
+
+    (_, Var y)        -> eqBindVar (bySym t1 t2 eq) y t1 fs
+
+
+eqBindVar :: Proof -> Var -> Term -> Facts -> AddFact
+eqBindVar eq x t fs = Added (leqRestart ++ changed)
+                            Facts { factsEq   = compose su (factsEq fs)
+                                  , factsLeq  = leqModel
+                                  , facts     = others
+                                  }
+
+  where
+  {-No need for an "occurs" check because the terms are simple (no recursion)-}
+  su                     = singleSubst x t eq
+
+  (leqRestart, leqModel) = case leqExtract (Var x) (factsLeq fs) of
+                             Nothing      -> ([], factsLeq fs)
+                             Just (lfs,m) -> (map (impFact su) lfs, m)
+
+  (changed, others)      = mapExtract improve (facts fs)
+
+  improve fact           = case impFactChange su fact of
+                             (_,False) -> Nothing
+                             (fact1,_) -> Just fact1
+
 
 
 {- The returned proof asserts that the original term and the term with
@@ -974,6 +964,19 @@ data LeqEdges = LeqEdges { lnAbove :: S.Set LeqEdge -- proof: here   <= above
                          , lnBelow :: S.Set LeqEdge -- proof: bellow <= here
                          } deriving Show
 
+leqNodeFacts :: Term -> LeqEdges -> [Fact]
+leqNodeFacts x es = toFacts lnBelow lowerFact ++ toFacts lnAbove upperFact
+  where
+  toFacts list f = map f $ S.toList $ list es
+
+  upperFact f    = Fact { factProp  = Prop Leq [x, leTarget f]
+                        , factProof = leProof f
+                        }
+
+  lowerFact f    = Fact { factProp  = Prop Leq [leTarget f, x]
+                        , factProof = leProof f
+                        }
+
 noLeqEdges :: LeqEdges
 noLeqEdges = LeqEdges { lnAbove = S.empty, lnBelow = S.empty }
 
@@ -994,6 +997,8 @@ leqFactsToList (LM m) =
   where triv (Num {}) (Num {}) = True
         triv (Num 0 _) _       = True
         triv _       _         = False
+
+
 
 leqImmAbove :: LeqFacts -> Term -> S.Set LeqEdge
 leqImmAbove (LM m) t = case M.lookup t m of
@@ -1145,7 +1150,8 @@ leqAddFact proof t1 t2 fs =
 
          case leqReachable m2 t1 t2 of
            Nothing -> let (_,_,m3) = leqLink proof (t1,n1) (t2,n2) m2
-                      in Added [] fs { factsLeq = m3 }
+                      in Added (propsToList (facts fs))
+                               fs { factsLeq = m3, facts = noProps }
            Just _  -> AlreadyKnown
 
        {- We know the opposite: we don't add the fact
@@ -1162,13 +1168,39 @@ leqFactsAffectedBy (LM m) = any affects . substDom
                       Nothing -> False
                       _       -> True
 
-
 leqProve :: LeqFacts -> Term -> Term -> Maybe Proof
 leqProve model s t =
   let (_,m1) = leqInsNode s model
       (_,m2) = leqInsNode t m1
   in leqReachable m2 s t
 
+
+{- Remove the term from the model, and return the facts immediately
+associated with ot.
+
+This is useful when we want to improve a term: we remove it from the model,
+improve the associated facts, and then add them back.
+-}
+leqExtract :: Term -> LeqFacts -> Maybe ([Fact], LeqFacts)
+leqExtract term (LM m) =
+  case M.updateLookupWithKey (\_ _ -> Nothing) term m of
+    (Nothing, _)  -> Nothing
+    (Just es, m1) -> Just
+      ( leqNodeFacts term es
+      , LM $ fold adjAbove (nodes lnBelow es)
+           $ fold adjBelow (nodes lnAbove es) m1
+      )
+  where
+  del         = S.delete LeqEdge { leTarget = term, leProof = undefined }
+  adjAbove    = M.adjust (\e -> e { lnAbove = del (lnAbove e) })
+  adjBelow    = M.adjust (\e -> e { lnBelow = del (lnBelow e) })
+  nodes f es  = S.mapMonotonic leTarget (f es)
+  fold f xs x = S.fold f x xs
+
+leqContains :: LeqFacts -> Term -> Bool
+leqContains (LM m) t = case M.lookup t m of
+                         Nothing -> False
+                         Just _  -> True
 
 --------------------------------------------------------------------------------
 
