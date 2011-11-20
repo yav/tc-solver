@@ -970,8 +970,8 @@ instance Eq LeqEdge where
 instance Ord LeqEdge where
   compare x y = compare (leTarget x) (leTarget y)
 
-data LeqEdges = LeqEdges { lnAbove :: S.Set LeqEdge
-                         , lnBelow :: S.Set Term
+data LeqEdges = LeqEdges { lnAbove :: S.Set LeqEdge -- proof: here   <= above
+                         , lnBelow :: S.Set LeqEdge -- proof: bellow <= here
                          } deriving Show
 
 noLeqEdges :: LeqEdges
@@ -1057,7 +1057,7 @@ leqLink :: Proof -> (Term,LeqEdges) -> (Term,LeqEdges) -> LeqFacts ->
 leqLink proof (lower, ledges) (upper, uedges) (LM m) =
 
   let uus         = S.mapMonotonic leTarget (lnAbove uedges)
-      lls         = lnBelow ledges
+      lls         = S.mapMonotonic leTarget (lnBelow ledges)
 
       newLedges   = ledges { lnAbove =
                                S.insert (LeqEdge { leProof  = proof
@@ -1067,22 +1067,32 @@ leqLink proof (lower, ledges) (upper, uedges) (LM m) =
                                $ lnAbove ledges
                            }
       newUedges   = uedges { lnBelow =
-                               S.insert lower
-                               $ S.filter (not . (`S.member` lls))
+                               S.insert (LeqEdge { leProof  = proof
+                                                 , leTarget = lower
+                                                 })
+                               $ S.filter (not . (`S.member` lls) . leTarget)
                                $ lnBelow uedges
                            }
 
-      delU        = (/= upper) . leTarget
-      adjAbove    = M.adjust (\e -> e { lnAbove = S.filter delU  (lnAbove e) })
-      adjBelow    = M.adjust (\e -> e { lnBelow = S.delete lower (lnBelow e) })
+{- The "undefined" in 'del' is OK because the proofs are not used in the
+comparison and the set API seems to lack a function to get the same behavior.
+Note that filter-ing is a little different because it has to traverse the
+whole set while here we stop as soon as we found the element that is
+to be removed. -}
+
+      del x       = S.delete LeqEdge { leTarget = x, leProof = undefined }
+
+
+      adjAbove    = M.adjust (\e -> e { lnAbove = del upper (lnAbove e) })
+      adjBelow    = M.adjust (\e -> e { lnBelow = del lower (lnBelow e) })
       fold f xs x = S.fold f x xs
 
   in ( newLedges
      , newUedges
      , LM $ M.insert lower newLedges
           $ M.insert upper newUedges
-          $ fold adjAbove (lnBelow ledges)
-          $ fold adjBelow (S.mapMonotonic leTarget (lnAbove uedges))
+          $ fold adjAbove lls
+          $ fold adjBelow uus
             m
      )
 
