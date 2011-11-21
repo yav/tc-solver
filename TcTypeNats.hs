@@ -5,7 +5,7 @@ import Control.Monad(foldM,guard,MonadPlus(..),msum)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.List(find)
-import Data.Maybe(fromMaybe)
+import Data.Maybe(fromMaybe,isNothing)
 import Data.Either(partitionEithers)
 import Text.PrettyPrint
 import Data.List(zipWith5)
@@ -243,10 +243,18 @@ insertImpFact f fs =
   case factProp f of
     Prop Eq  [s,t] -> eqAddFact  (factProof f) s t fs
     Prop Leq [s,t] -> leqAddFact (factProof f) s t fs
+    _ | impossible (factProp f) -> Inconsistent
     _ ->
       case solve (facts fs) (factProp f) of
         Just _ -> AlreadyKnown
         _      -> Added (implied fs f) fs { facts = insertProps f (facts fs) }
+  where
+  -- XXX: It would be nicer to make this less ad-hoc.
+  impossible (Prop Mul [Num x _, _, Num y _]) = isNothing (divide y x)
+  impossible (Prop Exp [Num x _, _, Num y _]) = isNothing (descreteLog y x)
+  impossible (Prop Exp [_, Num x _, Num y _]) = isNothing (descreteRoot y x)
+  impossible _ = False
+
 
 {- 'addFact' is simillar to 'insertFact' but it returns a bit more detail
 about what happened.  In particular, if the fact is actually to be added
