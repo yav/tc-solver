@@ -119,13 +119,6 @@ getOne (P ps) =
      (t,ts)          <- S.minView terms
      return (t, if S.null ts then P qs else P (M.insert op ts qs))
 
--- | Pick one of the propositions from a set in all possible ways.
-chooseProp :: (Ord a, HasProp a) => Props a -> [(a,Props a)]
-chooseProp ps =
-  case getOne ps of
-    Nothing -> []
-    Just (q,qs) -> (q,qs) : [ (a,insertProps q as) | (a,as) <- chooseProp qs ]
-
 -- | Get the arguments of propositions constructed with a given
 -- predicate constructor.
 getPropsFor :: Pred -> Props a -> [a]
@@ -153,9 +146,6 @@ getPropsFor3 op ps =
 isEmptyProps :: Props a -> Bool
 isEmptyProps (P ps) = M.null ps
 
-mapProps :: (Ord a, Ord b) => (a -> b) -> Props a -> Props b
-mapProps f (P m) = P (fmap (S.map f) m)
-
 -- | Remove propositions that do not satisfy the given predicate.
 filterProps :: (Ord a, HasProp a) => (a -> Bool) -> Props a -> Props a
 filterProps p (P ps) = P (M.mapMaybeWithKey upd ps)
@@ -166,18 +156,13 @@ filterProps p (P ps) = P (M.mapMaybeWithKey upd ps)
 not change (i.e., the parameter returns 'Nothing').  The new values
 of the members that did change are returned in a list. -}
 
-mapExtract :: (Ord a, HasProp a) => (a -> Maybe a) -> Props a ->
-                                                        ([a], Props a)
+mapExtract :: (Ord a, HasProp a) =>
+              (a -> Maybe a) -> Props a -> ([a], Props a)
 mapExtract f ps = case partitionEithers $ map apply $ propsToList ps of
                     (remains,changed) -> (changed, propsFromList remains)
   where apply x = case f x of
                     Nothing -> Left x
                     Just a  -> Right a
-
-
--- | Remove propositions with the given predicate constructor.
-rmPropsFor :: Pred -> Props a -> Props a
-rmPropsFor op (P as) = P (M.delete op as)
 
 
 {-------------------------------------------------------------------------------
@@ -343,8 +328,7 @@ insertWanted w ps = ps { wanted = insertProps w (wanted ps) }
 Proofs and Theorems
 -------------------------------------------------------------------------------}
 
-data Theorem  = AssumedFalse
-              | EqRefl      -- forall a.                        a = a
+data Theorem  = EqRefl      -- forall a.                        a = a
               | EqSym       -- forall a b.   (a = b)         => b = a
               | EqTrans     -- forall a b c. (a = b, b = c)  => a = c
               | Cong Pred   -- forall xs ys. (xs = ys, F xs) => F ys
@@ -449,9 +433,6 @@ proofLet x p1 (Using (Cong p) ts ss) = byCong p ts (init ss1) (last ss1)
   where ss1 = map (proofLet x p1) ss
 proofLet x p1 (Using t ts ps) = Using t ts (map (proofLet x p1) ps)
 
-byFalse :: Proof
-byFalse = Using AssumedFalse [] []
-
 {-------------------------------------------------------------------------------
 Results of Entailement
 -------------------------------------------------------------------------------}
@@ -537,33 +518,6 @@ the propositions in it cannot ``interact'' with each other.
 -- | To distinguish sets with this property from other sets of propositions
 -- we use a separate type synonym.
 type InertProps = SolverProps
-
-{-
--- | More formally, the following predicate captures the ``non-interacion''
--- invariant of the inert set:
-inert_prop :: InertProps -> TCN ()
-inert_prop props =
-  do -- sequence_ [ noInteraction gs g | (g, gs) <- chooseProp givens  ]
-     sequence_ [ noInteraction (assuming ws) w | (w, ws) <- chooseProp wanteds ]
-
-  where givens      = given props
-        wanteds     = wanted props
-        assuming ws = unionProps (mapProps goalToFact ws) givens
-        noInteraction as b = (guard . isNotForAll) =<< entails as b
--}
-
-{- The predicate consists of two parts, both of the same form:  the first one
-asserts that the collection of given facts is consistent and non-redundant,
-while the second asserts the same property for the set of goals.
-The ``consistent and non-redundant'' property is captured
-by the requirement that when we use the entailment function we get
-the answer \Verb"NotForAll"---had we obtained \Verb"NotForAny", we would
-have a constradiction and hence the propositions would not be consistent,
-and if we obtained \Verb"YesIf", then then the proposition would
-be redundant and hence may be eliminated.  The predicate makes use
-of the auxiliary function \Verb"chooseProp", which extracts a single
-element from a collection in all possible ways.  -}
-
 
 data PassResult = PassResult { solvedWanted :: [(EvVar,Proof)]
                              , newGoals     :: [Goal]
