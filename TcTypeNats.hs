@@ -275,12 +275,39 @@ factsToList fs = substToFacts (factsEq fs) ++
 noFacts :: Facts
 noFacts = Facts { facts = noProps, factsEq = emptySubst, factsLeq = noLeqFacts }
 
+{- 'addFact' attempts to extend a collection of already known facts.
+The resulting value contains information about how the new fact
+interacted with the already existing facts.
+
+Note that adding a fact may result in removing some existing facts from
+the set (e.g., if they bceome obsolete in the presence of the new fact).
+It is quite common to add a fact and "reprocess" a bunch of existing
+facts by removing them from the set and adding improved version as
+new work.
+-}
+
+data AddFact = Inconsistent
+             | AlreadyKnown
+             | Improved Fact
+             | Added RawFacts Facts     -- additional facts, new set
+
+addFact :: Fact -> Facts -> AddFact
+addFact fact0 cur_known =
+  let (fact,changed) = impFactChange (factsEq cur_known) fact0
+  in if changed
+        then Improved fact
+        else insertImpFact fact cur_known
+
+
+-- XXX: Get rid of this.
 insertFact :: Fact -> Facts -> Maybe (RawFacts,Facts)
 insertFact f fs = case insertImpFact (impFact (factsEq fs) f) fs of
                     Inconsistent -> Nothing
                     AlreadyKnown -> Just (noRawFacts, fs)
                     Improved f1  -> Just (oneRawFact f1, fs)
                     Added xs fs1 -> Just (xs, fs1)
+
+
 
 
 {- NOTE: This function assumes that the substition from the facts has
@@ -307,23 +334,6 @@ insertImpFact f fs =
   impossible (Prop Exp [_, Num x _, Num y _]) = isNothing (descreteRoot y x)
   impossible _ = False
 
-
-{- 'addFact' is simillar to 'insertFact' but it returns a bit more detail
-about what happened.  In particular, if the fact is actually to be added
-to the collection, we also compute a set of additional facts that follow
-from combining the existing facts with the new one. -}
-
-data AddFact = Inconsistent
-             | AlreadyKnown
-             | Improved Fact
-             | Added RawFacts Facts     -- additional facts, new set
-
-addFact :: Fact -> Facts -> AddFact
-addFact fact0 cur_known =
-  let (fact,changed) = impFactChange (factsEq cur_known) fact0
-  in if changed
-        then Improved fact
-        else insertImpFact fact cur_known
 
 {- Add a fact and all the facts that follow from it.  The arguments are
 ordered like this so that the function can be used conveniently with 'foldM'. -}
@@ -1406,8 +1416,8 @@ toProp p = panic $
 
 toInert :: CanonicalCts -> CanonicalCts -> InertProps
 toInert gs ws = SolverProps { given  = listToProps (bagToList gs)
-                        , wanted = listToProps (bagToList ws)
-                        }
+                            , wanted = listToProps (bagToList ws)
+                            }
 
 
 
