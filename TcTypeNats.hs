@@ -194,9 +194,73 @@ instance Ord Fact where
 
 --------------------------------------------------------------------------------
 
+{- A collection of unprocessed facts.  When processing facts, it is more
+efficient if we first process equalities, then orider and, finally, all other
+facts.  To make this easy, we store unprocessed facts as 'RawFacts' instead
+of just using [Fact].
+
+We add equalities first because they might lead to improvements that,
+in turn, would enable the discovery of additional facts.  In particular, if a
+presently known fact gets improved, then the old fact is removed from the
+list of known facts, and its improved version is added as new work.  Thus,
+if we process equalities first, we don't need to do any of this "restarting".
+
+For similar reasons we process ordering predicates before others: they
+make it possible for certain conditional rules to fire.  For example,
+the cancellation rule for multiplication requires that the argument that
+is being cancelled is greater than 0.
+ -}
+
+data RawFacts = RawFacts { rawEqFacts  :: [Fact]
+                         , rawLeqFacts :: [Fact]
+                         , rawFacts    :: [Fact]
+                         }
+
+noRawFacts :: RawFacts
+noRawFacts = RawFacts { rawEqFacts  = []
+                      , rawLeqFacts = []
+                      , rawFacts    = []
+                      }
+
+insertRawFact :: Fact -> RawFacts -> RawFacts
+insertRawFact f fs = case propPred f of
+                       Eq  -> fs { rawEqFacts  = f : rawEqFacts fs }
+                       Leq -> fs { rawLeqFacts = f : rawLeqFacts fs }
+                       _   -> fs { rawFacts    = f : rawFacts fs }
+
+oneRawFact :: Fact -> RawFacts
+oneRawFact f = insertRawFact f noRawFacts
+
+appendRawFacts :: RawFacts -> RawFacts -> RawFacts
+appendRawFacts fs1 fs2 =
+  RawFacts { rawEqFacts  = rawEqFacts  fs1 ++ rawEqFacts  fs2
+           , rawLeqFacts = rawLeqFacts fs1 ++ rawLeqFacts fs2
+           , rawFacts    = rawFacts    fs1 ++ rawFacts    fs2
+           }
+
+getRawFact :: RawFacts -> Maybe (Fact, RawFacts)
+getRawFact fs =
+  case rawEqFacts fs of
+    e : es -> return (e, fs { rawEqFacts = es })
+    []     -> case rawLeqFacts fs of
+                l : ls -> return (l, fs { rawLeqFacts = ls })
+                []     -> case rawFacts fs of
+                            o : os -> return (o, fs { rawFacts = os })
+                            []     -> Nothing
+
+rawFactsFromList :: [Fact] -> RawFacts
+rawFactsFromList = foldr insertRawFact noRawFacts
+
+rawFactsToList :: RawFacts -> [Fact]
+rawFactsToList fs = rawEqFacts fs ++ rawLeqFacts fs ++ rawFacts fs
+--------------------------------------------------------------------------------
+
+
+
 {- A collection of facts. Equalities are normalized to form a substitution,
 and we inforce the invariant that this substitution is always applied to
-the remaining facts. -}
+the remaining facts. Also, ordering predicates are grouped into a separate
+structire, the order model. -}
 
 data Facts = Facts { facts    :: Props Fact -- Excluding equality and order
                    , factsEq  :: Subst      -- Normalized equalities
@@ -211,11 +275,11 @@ factsToList fs = substToFacts (factsEq fs) ++
 noFacts :: Facts
 noFacts = Facts { facts = noProps, factsEq = emptySubst, factsLeq = noLeqFacts }
 
-insertFact :: Fact -> Facts -> Maybe ([Fact],Facts)
+insertFact :: Fact -> Facts -> Maybe (RawFacts,Facts)
 insertFact f fs = case insertImpFact (impFact (factsEq fs) f) fs of
                     Inconsistent -> Nothing
-                    AlreadyKnown -> Just ([], fs)
-                    Improved f1  -> Just ([f1], fs)
+                    AlreadyKnown -> Just (noRawFacts, fs)
+                    Improved f1  -> Just (oneRawFact f1, fs)
                     Added xs fs1 -> Just (xs, fs1)
 
 
@@ -232,7 +296,10 @@ insertImpFact f fs =
     _ ->
       case solve (facts fs) (factProp f) of
         Just _ -> AlreadyKnown
-        _      -> Added (implied fs f) fs { facts = insertProps f (facts fs) }
+
+        -- XXX: Modify "implied" to generate RawFacts directly.
+        _      -> Added (rawFactsFromList (implied fs f))
+                        fs { facts = insertProps f (facts fs) }
   where
   -- XXX: It would be nicer to make this less ad-hoc.
   impossible (Prop Mul [Num x _, _, Num y _]) = isNothing (divide y x)
@@ -249,7 +316,7 @@ from combining the existing facts with the new one. -}
 data AddFact = Inconsistent
              | AlreadyKnown
              | Improved Fact
-             | Added [Fact] Facts     -- additional facts, new set
+             | Added RawFacts Facts     -- additional facts, new set
 
 addFact :: Fact -> Facts -> AddFact
 addFact fact0 cur_known =
@@ -272,23 +339,14 @@ addFactTrans facts0  fact =
 
 {- Add a collection of facts and all the facts that follow from them.
 We add equalities first, because they might lead to improvements that,
-in turn, would enable additional the discovery of additional facts.
+in turn, would enable the discovery of additional facts.
 Furthermore, improvements "restart" so we do less work if we do equalities
 first. -}
 
-addFactsTrans' :: Facts -> [Fact] -> Maybe Facts
-addFactsTrans' fs work = foldM addFactTrans fs (eqs ++ leqs ++ others)
-  where
-  (eqs,leqs,others) = reorder work
+addFactsTrans' :: Facts -> RawFacts -> Maybe Facts
+addFactsTrans' fs = foldM addFactTrans fs . rawFactsToList
 
-  reorder []       = ([],[],[])
-  reorder (p : ps) = let (es,ls,os) = reorder ps
-                     in case propPred p of
-                          Eq  -> (p:es,ls,os)
-                          Leq -> (es,p:ls,os)
-                          _   -> (es,ls,p:os)
-
-addFactsTrans :: Facts -> [Fact] -> Maybe Facts
+addFactsTrans :: Facts -> RawFacts -> Maybe Facts
 addFactsTrans fs facts0 =
   trace "Transitive facts" $
   case addFactsTrans' fs facts0 of
@@ -303,7 +361,10 @@ goalToFact :: Goal -> Fact
 goalToFact g = Fact { factProof = ByAsmp (goalName g), factProp = goalProp g }
 
 assumeGoals :: MonadPlus m => [Goal] -> Facts -> m Facts
-assumeGoals as bs = liftMb $ addFactsTrans bs $ map goalToFact as
+assumeGoals as bs = liftMb
+                  $ addFactsTrans bs
+                  $ rawFactsFromList
+                  $ map goalToFact as
 
 --------------------------------------------------------------------------------
 
@@ -315,7 +376,7 @@ data SolverProps = SolverProps { given :: Facts, wanted :: Props Goal }
 noSolverProps :: SolverProps
 noSolverProps = SolverProps { given = noFacts, wanted = noProps }
 
-insertGiven :: Fact -> SolverProps -> Maybe ([Fact],SolverProps)
+insertGiven :: Fact -> SolverProps -> Maybe (RawFacts,SolverProps)
 insertGiven g ps = do (new,gs) <- insertFact g (given ps)
                       return (new, ps { given = gs })
 
@@ -521,14 +582,14 @@ type InertProps = SolverProps
 
 data PassResult = PassResult { solvedWanted :: [(EvVar,Proof)]
                              , newGoals     :: [Goal]
-                             , newFacts     :: [Fact]
+                             , newFacts     :: RawFacts
                              , consumed     :: Bool
                              }
 
 noChanges :: PassResult
 noChanges = PassResult { solvedWanted = []
                        , newGoals     = []
-                       , newFacts     = []
+                       , newFacts     = noRawFacts
                        , consumed     = False
                        }
 
@@ -547,7 +608,9 @@ addGiven g props =
 
     Inconsistent  -> mzero
     AlreadyKnown  -> return noChanges { consumed = True }
-    Improved fact -> return noChanges { consumed = True, newFacts = [fact] }
+    Improved fact -> return noChanges { consumed = True
+                                      , newFacts = oneRawFact fact
+                                      }
 
 {- We don't add the new fact to the inerts yet because, in the context of GHC,
 there might be another pass that might want to have a go at the goal.
@@ -597,7 +660,7 @@ of the goal to the work queue. -}
           YesIf ps proof -> return PassResult
             { solvedWanted  = [ (goalName w, proof) ]
             , newGoals      = ps
-            , newFacts      = []
+            , newFacts      = noRawFacts
             , consumed      = True
             }
 
@@ -620,7 +683,7 @@ goals that result in no interaction in the inert set. -}
                    return PassResult
                      { solvedWanted = solved
                      , newGoals     = new
-                     , newFacts     = []
+                     , newFacts     = noRawFacts
                      , consumed     = False
                      }
 
@@ -713,7 +776,7 @@ entails ps p =
      case attempt1 of
        NotForAll
          | improvable ->    -- Is there room for improvement?
-         case addFactsTrans ps [goalToFact p] of
+         case addFactsTrans ps (oneRawFact (goalToFact p)) of
 
            -- The new goal contradicts the given assumptions.
            Nothing -> return NotForAny
@@ -838,7 +901,10 @@ eqAddFact eq t1 t2 fs =
 
 
 eqBindVar :: Proof -> Var -> Term -> Facts -> AddFact
-eqBindVar eq x t fs = Added (leqRestart ++ changed)
+eqBindVar eq x t fs = Added RawFacts { rawEqFacts  = []
+                                     , rawLeqFacts = leqRestart
+                                     , rawFacts    = changed
+                                     }
                             Facts { factsEq   = compose su (factsEq fs)
                                   , factsLeq  = leqModel
                                   , facts     = others
@@ -1112,7 +1178,7 @@ leqAddFact proof t1 t2 fs =
 
          case leqReachable m2 t1 t2 of
            Nothing -> let (_,_,m3) = leqLink proof (t1,n1) (t2,n2) m2
-                      in Added (propsToList (facts fs))
+                      in Added noRawFacts { rawFacts = propsToList (facts fs) }
                                fs { factsLeq = m3, facts = noProps }
            Just _  -> AlreadyKnown
 
@@ -1235,7 +1301,7 @@ the goals because the assumptions might help us to solve the goals.
 -------------------------------------------------------------------------------}
 
 data SolverS = SolverS
-  { ssTodoFacts :: [Fact]
+  { ssTodoFacts :: RawFacts
   , ssTodoGoals :: [Goal]
   , ssSolved    :: [(EvVar,Proof)]
   , ssInerts    :: InertProps
@@ -1244,16 +1310,16 @@ data SolverS = SolverS
 initSolverS :: SolverS
 initSolverS = SolverS
   { ssTodoGoals = []
-  , ssTodoFacts = []
+  , ssTodoFacts = noRawFacts
   , ssSolved    = []
   , ssInerts    = noSolverProps
   }
 
 
 getFact :: SolverS -> Maybe (Fact, SolverS)
-getFact s = case ssTodoFacts s of
-              []     -> Nothing
-              f : fs -> Just (f, s { ssTodoFacts = fs })
+getFact s = case getRawFact (ssTodoFacts s) of
+              Nothing     -> Nothing
+              Just (f,fs) -> Just (f, s { ssTodoFacts = fs })
 
 getGoal :: SolverS -> Maybe (Goal, SolverS)
 getGoal s = case ssTodoGoals s of
@@ -1270,7 +1336,7 @@ addSolved xs s = s { ssSolved = xs ++ ssSolved s
 
 nextState :: PassResult -> SolverS -> SolverS
 nextState r s = addSolved (solvedWanted r)
-                s { ssTodoFacts = newFacts r ++ ssTodoFacts s
+                s { ssTodoFacts = appendRawFacts (newFacts r) (ssTodoFacts s)
                   , ssTodoGoals = newGoals r ++ ssTodoGoals s
                   }
 
@@ -1295,7 +1361,7 @@ addWorkItemsM ss0 =
             then addWorkItemsM ss2
             else do (new,is) <- liftMb $ insertGiven fact $ ssInerts ss2
                     addWorkItemsM $ restartGoals
-                      ss2 { ssTodoFacts = new ++ ssTodoFacts ss2
+                      ss2 { ssTodoFacts = appendRawFacts new (ssTodoFacts ss2)
                           , ssInerts    = is
                           }
 

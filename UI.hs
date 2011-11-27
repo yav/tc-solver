@@ -79,7 +79,7 @@ initS = S { entered = M.empty, inertSet = Just initSolverS }
 addWorkItemsUI :: (Int,[WorkItem]) -> SolverS -> Maybe SolverS
 addWorkItemsUI (n,ws) is = addWorkItems is1 ('w' : show n) (length ws + 1)
   where is1 = is { ssTodoGoals = [ w | Wanted w <- ws ]
-                 , ssTodoFacts = [ g | Given g  <- ws ]
+                 , ssTodoFacts = rawFactsFromList [ g | Given g  <- ws ]
                  }
 
 processCmd :: Cmd -> S -> S
