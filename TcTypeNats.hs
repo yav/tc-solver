@@ -280,7 +280,7 @@ The resulting value contains information about how the new fact
 interacted with the already existing facts.
 
 Note that adding a fact may result in removing some existing facts from
-the set (e.g., if they bceome obsolete in the presence of the new fact).
+the set (e.g., if they become obsolete in the presence of the new fact).
 It is quite common to add a fact and "reprocess" a bunch of existing
 facts by removing them from the set and adding improved version as
 new work.
@@ -292,47 +292,43 @@ data AddFact = Inconsistent
              | Added RawFacts Facts     -- additional facts, new set
 
 addFact :: Fact -> Facts -> AddFact
-addFact fact0 cur_known =
-  let (fact,changed) = impFactChange (factsEq cur_known) fact0
-  in if changed
-        then Improved fact
-        else insertImpFact fact cur_known
+addFact f fs =
+  case impFactMb (factsEq fs) f of
+    Just f1 -> Improved f1
+    Nothing ->
+      case factProp f of
+        Prop Eq  [s,t] -> eqAddFact  (factProof f) s t fs
+        Prop Leq [s,t] -> leqAddFact (factProof f) s t fs
+        _ | impossible (factProp f) -> Inconsistent
+        _ ->
+          case solve (facts fs) (factProp f) of
+            Just _ -> AlreadyKnown
 
-
--- XXX: Get rid of this.
-insertFact :: Fact -> Facts -> Maybe (RawFacts,Facts)
-insertFact f fs = case insertImpFact (impFact (factsEq fs) f) fs of
-                    Inconsistent -> Nothing
-                    AlreadyKnown -> Just (noRawFacts, fs)
-                    Improved f1  -> Just (oneRawFact f1, fs)
-                    Added xs fs1 -> Just (xs, fs1)
-
-
-
-
-{- NOTE: This function assumes that the substition from the facts has
-already been applied to the new fact.  It can be used as an optimization to
-avoid applying the substitution twice. -}
-
-insertImpFact :: Fact -> Facts -> AddFact
-insertImpFact f fs =
-  case factProp f of
-    Prop Eq  [s,t] -> eqAddFact  (factProof f) s t fs
-    Prop Leq [s,t] -> leqAddFact (factProof f) s t fs
-    _ | impossible (factProp f) -> Inconsistent
-    _ ->
-      case solve (facts fs) (factProp f) of
-        Just _ -> AlreadyKnown
-
-        -- XXX: Modify "implied" to generate RawFacts directly.
-        _      -> Added (rawFactsFromList (implied fs f))
-                        fs { facts = insertProps f (facts fs) }
+            -- XXX: Modify "implied" to generate RawFacts directly.
+            _      -> Added (rawFactsFromList (implied fs f))
+                            fs { facts = insertProps f (facts fs) }
   where
   -- XXX: It would be nicer to make this less ad-hoc.
   impossible (Prop Mul [Num x _, _, Num y _]) = isNothing (divide y x)
   impossible (Prop Exp [Num x _, _, Num y _]) = isNothing (descreteLog y x)
   impossible (Prop Exp [_, Num x _, Num y _]) = isNothing (descreteRoot y x)
   impossible _ = False
+
+{-------------------------------------------------------------------------------
+Using Existing Goals
+-------------------------------------------------------------------------------}
+
+assumeGoals :: MonadPlus m => [Goal] -> Facts -> m Facts
+assumeGoals as bs = liftMb
+                  $ addFactsTrans bs
+                  $ rawFactsFromList
+                  $ map goalToFact as
+
+
+{- The function 'goalToFact' is used when we attempt to solve a new goal
+in terms of already existing goals. -}
+goalToFact :: Goal -> Fact
+goalToFact g = Fact { factProof = ByAsmp (goalName g), factProp = goalProp g }
 
 
 {- Add a fact and all the facts that follow from it.  The arguments are
@@ -362,36 +358,6 @@ addFactsTrans fs facts0 =
   case addFactsTrans' fs facts0 of
     Nothing -> trace "(nothing)" Nothing
     Just x  -> trace (show (pp x)) $ Just x
-
-
-
-{- The function 'goalToFact' is used when we attempt to solve a new goal
-in terms of already existing goals. -}
-goalToFact :: Goal -> Fact
-goalToFact g = Fact { factProof = ByAsmp (goalName g), factProp = goalProp g }
-
-assumeGoals :: MonadPlus m => [Goal] -> Facts -> m Facts
-assumeGoals as bs = liftMb
-                  $ addFactsTrans bs
-                  $ rawFactsFromList
-                  $ map goalToFact as
-
---------------------------------------------------------------------------------
-
-{- A part of the solver's state keeps track of the current set of known facts,
-and the goals that still need to be solved. -}
-
-data SolverProps = SolverProps { given :: Facts, wanted :: Props Goal }
-
-noSolverProps :: SolverProps
-noSolverProps = SolverProps { given = noFacts, wanted = noProps }
-
-insertGiven :: Fact -> SolverProps -> Maybe (RawFacts,SolverProps)
-insertGiven g ps = do (new,gs) <- insertFact g (given ps)
-                      return (new, ps { given = gs })
-
-insertWanted :: Goal -> SolverProps -> SolverProps
-insertWanted w ps = ps { wanted = insertProps w (wanted ps) }
 
 
 
@@ -586,58 +552,42 @@ were attempted but not solved.  We refer to this set as ``inert'' because
 the propositions in it cannot ``interact'' with each other.
 -------------------------------------------------------------------------------}
 
--- | To distinguish sets with this property from other sets of propositions
--- we use a separate type synonym.
-type InertProps = SolverProps
+data Inerts = Inerts { given :: Facts, wanted :: Props Goal }
+
+noInerts :: Inerts
+noInerts = Inerts { given = noFacts, wanted = noProps }
+
 
 data PassResult = PassResult { solvedWanted :: [(EvVar,Proof)]
                              , newGoals     :: [Goal]
                              , newFacts     :: RawFacts
-                             , consumed     :: Bool
+                             , newInerts    :: Inerts
                              }
 
-noChanges :: PassResult
-noChanges = PassResult { solvedWanted = []
-                       , newGoals     = []
-                       , newFacts     = noRawFacts
-                       , consumed     = False
-                       }
+noChanges :: Inerts -> PassResult
+noChanges is = PassResult { solvedWanted = []
+                          , newGoals     = []
+                          , newFacts     = noRawFacts
+                          , newInerts    = is
+                          }
 
 
 
-{-------------------------------------------------------------------------------
-Adding a New Assumption (given)
-
-When we add a new assumption to an inert set we check for ``interactions''
-with the existing assumptions by using the entailment function.
--------------------------------------------------------------------------------}
-
-addGiven  :: Fact -> InertProps -> TCN PassResult
+{- Adding a new assumptions to an inert set.
+If the assumptions was added to the set, then we remove any existing goals
+and add them as new work, in case they can be solved in terms of the
+new fact. -}
+addGiven  :: Fact -> Inerts -> TCN PassResult
 addGiven g props =
   case addFact g (given props) of
-
     Inconsistent  -> mzero
-    AlreadyKnown  -> return noChanges { consumed = True }
-    Improved fact -> return noChanges { consumed = True
-                                      , newFacts = oneRawFact fact
-                                      }
-
-{- We don't add the new fact to the inerts yet because, in the context of GHC,
-there might be another pass that might want to have a go at the goal.
-
-When a new fact is added to the system, we need to restart any existing
-goal, because they might be solvable using the new fact.  Currently,
-this is done in our top level solver, when it encounters a non-consumed
-given.  It is important to make sure that GHC does the same.  If
-not, we can simulate the same behavior when we translate from this
-representation to GHC's.
--}
-
-    Added new _ -> return
-      PassResult { newGoals      = []
+    AlreadyKnown  -> return (noChanges props)
+    Improved fact -> return (noChanges props) { newFacts = oneRawFact fact }
+    Added new newProps -> return
+      PassResult { newGoals      = propsToList (wanted props)
                  , newFacts      = new
                  , solvedWanted  = []
-                 , consumed      = False
+                 , newInerts     = Inerts { given = newProps, wanted = noProps }
                  }
 
 
@@ -653,7 +603,7 @@ the new goal in terms of already existing goals, thus leaving the inert
 set unchanged.
 -------------------------------------------------------------------------------}
 
-addWanted :: Goal -> InertProps -> TCN PassResult
+addWanted :: Goal -> Inerts -> TCN PassResult
 addWanted w props =
 
      do asmps <- assumeGoals wantedList (given props)
@@ -671,7 +621,7 @@ of the goal to the work queue. -}
             { solvedWanted  = [ (goalName w, proof) ]
             , newGoals      = ps
             , newFacts      = noRawFacts
-            , consumed      = True
+            , newInerts     = props
             }
 
 {- The major difference in the algorithm is when there is no interaction
@@ -689,12 +639,15 @@ goals that result in no interaction in the inert set. -}
           NotForAll ->
                 do asmps0 <- assumeGoals [w] (given props)
                    (solved,new) <- checkExisting [] [] asmps0 wantedList
+                   let keepGoal p = not (goalName p `elem` map fst solved)
 
                    return PassResult
                      { solvedWanted = solved
                      , newGoals     = new
                      , newFacts     = noRawFacts
-                     , consumed     = False
+                     , newInerts =
+                        props { wanted = insertProps w
+                                         (filterProps keepGoal (wanted props)) }
                      }
 
   where
@@ -786,7 +739,7 @@ entails ps p =
      case attempt1 of
        NotForAll
          | improvable ->    -- Is there room for improvement?
-         case addFactsTrans ps (oneRawFact (goalToFact p)) of
+         case assumeGoals [p] ps of
 
            -- The new goal contradicts the given assumptions.
            Nothing -> return NotForAny
@@ -928,13 +881,7 @@ eqBindVar eq x t fs = Added RawFacts { rawEqFacts  = []
                              Nothing      -> ([], factsLeq fs)
                              Just (lfs,m) -> (map (impFact su) lfs, m)
 
-  (changed, others)      = mapExtract improve (facts fs)
-
-  improve fact           = case impFactChange su fact of
-                             (_,False) -> Nothing
-                             (fact1,_) -> Just fact1
-
-
+  (changed, others)      = mapExtract (impFactMb su) (facts fs)
 
 {- The returned proof asserts that the original term and the term with
 the substitution applied are equal.
@@ -964,6 +911,11 @@ impGoal su p
 -- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
 impFact :: Subst -> Fact -> Fact
 impFact su p = fst (impFactChange su p)
+
+impFactMb :: Subst -> Fact -> Maybe Fact
+impFactMb su p = case impFactChange su p of
+                   (_,False)  -> Nothing
+                   (fact1,_)  -> Just fact1
 
 -- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
 impFactChange :: Subst -> Fact -> (Fact, Bool)
@@ -1314,7 +1266,7 @@ data SolverS = SolverS
   { ssTodoFacts :: RawFacts
   , ssTodoGoals :: [Goal]
   , ssSolved    :: [(EvVar,Proof)]
-  , ssInerts    :: InertProps
+  , ssInerts    :: Inerts
   }
 
 initSolverS :: SolverS
@@ -1322,7 +1274,7 @@ initSolverS = SolverS
   { ssTodoGoals = []
   , ssTodoFacts = noRawFacts
   , ssSolved    = []
-  , ssInerts    = noSolverProps
+  , ssInerts    = noInerts
   }
 
 
@@ -1336,25 +1288,14 @@ getGoal s = case ssTodoGoals s of
               []     -> Nothing
               g : gs -> Just (g, s { ssTodoGoals = gs })
 
-addSolved :: [(EvVar,Proof)] -> SolverS -> SolverS
-addSolved [] s = s
-addSolved xs s = s { ssSolved = xs ++ ssSolved s
-                   , ssInerts = is { wanted = filterProps keep (wanted is) }
-                   }
-  where is     = ssInerts s
-        keep p = not (goalName p `elem` map fst xs)
-
 nextState :: PassResult -> SolverS -> SolverS
-nextState r s = addSolved (solvedWanted r)
-                s { ssTodoFacts = appendRawFacts (newFacts r) (ssTodoFacts s)
-                  , ssTodoGoals = newGoals r ++ ssTodoGoals s
-                  }
+nextState r s =
+  SolverS { ssTodoFacts = appendRawFacts (newFacts r) (ssTodoFacts s)
+          , ssTodoGoals = newGoals r ++ ssTodoGoals s
+          , ssInerts    = newInerts r
+          , ssSolved    = solvedWanted r ++ ssSolved s
+          }
 
-restartGoals :: SolverS -> SolverS
-restartGoals s = s { ssTodoGoals = propsToList (wanted is) ++ ssTodoGoals s
-                   , ssInerts    = is { wanted = noProps }
-                   }
-  where is = ssInerts s
 
 addWorkItems :: SolverS -> String -> Int -> Maybe SolverS
 addWorkItems is r s = fst `fmap` runTCN (addWorkItemsM is) r s
@@ -1366,24 +1307,13 @@ addWorkItemsM ss0 =
   case getFact ss0 of
     Just (fact, ss1) ->
       do r <- addGiven fact (ssInerts ss1)
-         let ss2 = nextState r ss1
-         if consumed r
-            then addWorkItemsM ss2
-            else do (new,is) <- liftMb $ insertGiven fact $ ssInerts ss2
-                    addWorkItemsM $ restartGoals
-                      ss2 { ssTodoFacts = appendRawFacts new (ssTodoFacts ss2)
-                          , ssInerts    = is
-                          }
+         addWorkItemsM (nextState r ss1)
 
     Nothing ->
       case getGoal ss0 of
        Just (goal, ss1) ->
          do r <- addWanted goal (ssInerts ss1)
-            let ss2 = nextState r ss1
-            addWorkItemsM $
-              if consumed r
-                then ss2
-                else ss2 { ssInerts = insertWanted goal (ssInerts ss2) }
+            addWorkItemsM (nextState r ss1)
 
        Nothing -> return ss0
 
@@ -1414,7 +1344,7 @@ toProp p = panic $
   "[TcTypeNats.toProp] Unexpected CanonicalCt: " ++ showSDoc (ppr p)
 
 
-toInert :: CanonicalCts -> CanonicalCts -> InertProps
+toInert :: CanonicalCts -> CanonicalCts -> Inerts
 toInert gs ws = SolverProps { given  = listToProps (bagToList gs)
                             , wanted = listToProps (bagToList ws)
                             }
@@ -1596,7 +1526,7 @@ instance (Ord a, PP a) => PP (Props a) where
   pp = vcat . map pp . propsToList
 
 
-instance PP SolverProps where
+instance PP Inerts where
   pp is = pp (given is) $$ pp (wanted is)
 
 instance PP Facts where
