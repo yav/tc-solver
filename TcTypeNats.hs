@@ -1,7 +1,7 @@
 module TcTypeNats where
 
 import TcTypeNatsBase
-import TcTypeNatsProps
+import TcTypeNatsProps as Props
 import TcTypeNatsEq as Subst
 import TcTypeNatsLeq
 import TcTypeNatsFacts
@@ -48,7 +48,7 @@ addFact f fs =
 
             -- XXX: Modify "implied" to generate RawFacts directly.
             _      -> Added (rawFactsFromList (implied fs f))
-                            fs { facts = insertProps f (facts fs) }
+                            fs { facts = Props.insert f (facts fs) }
   where
   -- XXX: It would be nicer to make this less ad-hoc.
   impossible (Prop Mul [Num x _, _, Num y _]) = isNothing (divide y x)
@@ -187,7 +187,7 @@ the propositions in it cannot ``interact'' with each other.
 data Inerts = Inerts { given :: Facts, wanted :: Props Goal }
 
 noInerts :: Inerts
-noInerts = Inerts { given = noFacts, wanted = noProps }
+noInerts = Inerts { given = noFacts, wanted = Props.empty }
 
 
 data PassResult = PassResult { solvedWanted :: [(EvVar,Proof)]
@@ -216,10 +216,10 @@ addGiven g props =
     AlreadyKnown  -> return (noChanges props)
     Improved fact -> return (noChanges props) { newFacts = oneRawFact fact }
     Added new newProps -> return
-      PassResult { newGoals      = propsToList (wanted props)
+      PassResult { newGoals      = Props.toList (wanted props)
                  , newFacts      = new
                  , solvedWanted  = []
-                 , newInerts     = Inerts { given = newProps, wanted = noProps }
+                 , newInerts     = Inerts { given = newProps, wanted = Props.empty }
                  }
 
 
@@ -278,12 +278,12 @@ goals that result in no interaction in the inert set. -}
                      , newGoals     = new
                      , newFacts     = noRawFacts
                      , newInerts =
-                        props { wanted = insertProps w
-                                         (filterProps keepGoal (wanted props)) }
+                        props { wanted = Props.insert w
+                                         (Props.filter keepGoal (wanted props)) }
                      }
 
   where
-  wantedList        = propsToList (wanted props)
+  wantedList        = Props.toList (wanted props)
 
 {- The function 'checkExisting' has the details of how to check for interaction
 between some existing goal, 'w1', and the new goal 'w'.  The function uses
@@ -361,7 +361,7 @@ entails :: Facts -> Goal -> TCN Answer
 
 -- For debugging.
 entails ps p | gTrace msg = undefined
-  where msg = text "Entails?" $$ nest 2 (vcat (map pp (propsToList (facts ps)))
+  where msg = text "Entails?" $$ nest 2 (vcat (map pp (Props.toList (facts ps)))
                                       $$ text "-----------------"
                                       $$ pp p
                                         )
@@ -520,7 +520,7 @@ eqBindVar eq x t fs = Added RawFacts { rawEqFacts  = []
                              Nothing      -> ([], factsLeq fs)
                              Just (lfs,m) -> (map (impFact su) lfs, m)
 
-  (changed, others)      = mapExtract (impFactMb su) (facts fs)
+  (changed, others)      = Props.mapExtract (impFactMb su) (facts fs)
 
 leqAddFact :: Proof -> Term -> Term -> Facts -> AddFact
 leqAddFact proof t1 t2 fs =
@@ -534,8 +534,8 @@ leqAddFact proof t1 t2 fs =
 
          case leqReachable m2 t1 t2 of
            Nothing -> let (_,_,m3) = leqLink proof (t1,n1) (t2,n2) m2
-                      in Added noRawFacts { rawFacts = propsToList (facts fs) }
-                               fs { factsLeq = m3, facts = noProps }
+                      in Added noRawFacts { rawFacts = Props.toList (facts fs) }
+                               fs { factsLeq = m3, facts = Props.empty }
            Just _  -> AlreadyKnown
 
        {- We know the opposite: we don't add the fact

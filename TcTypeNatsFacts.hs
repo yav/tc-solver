@@ -3,7 +3,7 @@ module TcTypeNatsFacts where
 import TcTypeNatsBase
 import TcTypeNatsEq as Subst
 import TcTypeNatsLeq
-import TcTypeNatsProps
+import TcTypeNatsProps as Props
 
 import Text.PrettyPrint
 
@@ -20,11 +20,11 @@ data Facts = Facts { facts    :: Props Fact -- ^ Excluding equality and order
 factsToList :: Facts -> [Fact]
 factsToList fs = Subst.toFacts (factsEq fs) ++
                  leqFactsToList (factsLeq fs) ++
-                 propsToList (facts fs)
+                 Props.toList (facts fs)
 
 -- | An empty collection of facts.
 noFacts :: Facts
-noFacts = Facts { facts    = noProps
+noFacts = Facts { facts    = Props.empty
                 , factsEq  = Subst.identity
                 , factsLeq = noLeqFacts
                 }
