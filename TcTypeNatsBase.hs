@@ -31,9 +31,15 @@ num :: Integer -> Term
 num n = Num n Nothing
 
 
--- | Predicate Symbols
-data Pred = Add | Mul | Exp | Leq | Eq
+-- | Predicate symbols.  The ordering of these is important!
+-- 'Eq' should come before 'Leq' which should come before all others.
+-- This is used in module "TcTypeNatsProps" where function 'getOne'
+-- will returns facts according to this order.  It is more efficient
+-- to process equalities in this order (i.e., equalities first, then order,
+-- and finaly everything else.)
+data Pred = Eq | Leq | Add | Mul | Exp
             deriving (Show, Eq, Ord)
+
 
 arity :: Pred -> Int
 arity pr =

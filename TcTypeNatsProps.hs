@@ -13,6 +13,7 @@ module TcTypeNatsProps
   ( -- * Construction
     Props
   , empty
+  , singleton
   , insert
   , fromList
   , union
@@ -22,6 +23,7 @@ module TcTypeNatsProps
     -- * Querying
   , isEmpty
   , toList
+  , getOne
   , getPropsFor
   , getPropsFor2
   , getPropsFor3
@@ -47,6 +49,10 @@ toList (P ps) = S.toList $ S.unions $ M.elems ps
 empty :: Props a
 empty = P M.empty
 
+-- | A collection with just one entity.
+singleton :: HasProp a => a -> Props a
+singleton p = P (M.singleton (propPred p) (S.singleton p))
+
 -- | Add a proposition to an existing set.
 insert :: (Ord a, HasProp a) => a -> Props a -> Props a
 insert p (P ps) = P (M.insertWith S.union (propPred p) (S.singleton p) ps)
@@ -58,6 +64,17 @@ fromList = foldr insert empty
 -- | Combine the propositions from two sets.
 union :: Ord a => Props a -> Props a -> Props a
 union (P as) (P bs) = P (M.unionWith S.union as bs)
+
+{- | Pick one of the propositions from a set and
+return the remaining propositions.
+Returns 'Nothing' if the set is empty.
+The propositions are returned according to the order of their predicates
+(see 'Pred' from "TcTypeNatsBase"). -}
+getOne :: Props a -> Maybe (a, Props a)
+getOne (P ps) =
+  do ((op,terms),qs) <- M.minViewWithKey ps
+     (t,ts)          <- S.minView terms
+     return (t, if S.null ts then P qs else P (M.insert op ts qs))
 
 -- | Get the entities containing propositions constructed with the given
 -- predicate constructor.

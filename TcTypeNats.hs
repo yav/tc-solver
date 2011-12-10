@@ -5,7 +5,6 @@ import TcTypeNatsProps as Props
 import TcTypeNatsEq as Subst
 import TcTypeNatsLeq
 import TcTypeNatsFacts
-import TcTypeNatsRawFacts
 import TcTypeNatsRules
 import TcTypeNatsEval
 
@@ -14,7 +13,6 @@ import Text.PrettyPrint
 import Data.Maybe(fromMaybe,isNothing)
 import Data.List(find)
 import Control.Monad(MonadPlus(..),guard,msum,foldM)
-
 
 
 {- 'addFact' attempts to extend a collection of already known facts.
@@ -31,7 +29,7 @@ new work.
 data AddFact = Inconsistent
              | AlreadyKnown
              | Improved Fact
-             | Added RawFacts Facts     -- additional facts, new set
+             | Added (Props Fact) Facts     -- additional facts, new set
 
 addFact :: Fact -> Facts -> AddFact
 addFact f fs =
@@ -46,8 +44,8 @@ addFact f fs =
           case solve (facts fs) (factProp f) of
             Just _ -> AlreadyKnown
 
-            -- XXX: Modify "implied" to generate RawFacts directly.
-            _      -> Added (rawFactsFromList (implied fs f))
+            -- XXX: Modify "implied" to generate Props directly.
+            _      -> Added (Props.fromList (implied fs f))
                             fs { facts = Props.insert f (facts fs) }
   where
   -- XXX: It would be nicer to make this less ad-hoc.
@@ -63,7 +61,7 @@ Using Existing Goals
 assumeGoals :: MonadPlus m => [Goal] -> Facts -> m Facts
 assumeGoals as bs = maybe mzero return
                   $ addFactsTrans bs
-                  $ rawFactsFromList
+                  $ Props.fromList
                   $ map goalToFact as
 
 {- The function 'goalToFact' is used when we attempt to solve a new goal
@@ -90,10 +88,10 @@ in turn, would enable the discovery of additional facts.
 Furthermore, improvements "restart" so we do less work if we do equalities
 first. -}
 
-addFactsTrans' :: Facts -> RawFacts -> Maybe Facts
-addFactsTrans' fs = foldM addFactTrans fs . rawFactsToList
+addFactsTrans' :: Facts -> Props Fact -> Maybe Facts
+addFactsTrans' fs = foldM addFactTrans fs . Props.toList
 
-addFactsTrans :: Facts -> RawFacts -> Maybe Facts
+addFactsTrans :: Facts -> Props Fact -> Maybe Facts
 addFactsTrans fs facts0 =
   trace "Transitive facts" $
   case addFactsTrans' fs facts0 of
@@ -192,14 +190,14 @@ noInerts = Inerts { given = noFacts, wanted = Props.empty }
 
 data PassResult = PassResult { solvedWanted :: [(EvVar,Proof)]
                              , newGoals     :: [Goal]
-                             , newFacts     :: RawFacts
+                             , newFacts     :: Props Fact
                              , newInerts    :: Inerts
                              }
 
 noChanges :: Inerts -> PassResult
 noChanges is = PassResult { solvedWanted = []
                           , newGoals     = []
-                          , newFacts     = noRawFacts
+                          , newFacts     = Props.empty
                           , newInerts    = is
                           }
 
@@ -214,7 +212,7 @@ addGiven g props =
   case addFact g (given props) of
     Inconsistent  -> mzero
     AlreadyKnown  -> return (noChanges props)
-    Improved fact -> return (noChanges props) { newFacts = oneRawFact fact }
+    Improved fact -> return (noChanges props) { newFacts = Props.singleton fact }
     Added new newProps -> return
       PassResult { newGoals      = Props.toList (wanted props)
                  , newFacts      = new
@@ -252,7 +250,7 @@ of the goal to the work queue. -}
           YesIf ps proof -> return PassResult
             { solvedWanted  = [ (goalName w, proof) ]
             , newGoals      = ps
-            , newFacts      = noRawFacts
+            , newFacts      = Props.empty
             , newInerts     = props
             }
 
@@ -276,7 +274,7 @@ goals that result in no interaction in the inert set. -}
                    return PassResult
                      { solvedWanted = solved
                      , newGoals     = new
-                     , newFacts     = noRawFacts
+                     , newFacts     = Props.empty
                      , newInerts =
                         props { wanted = Props.insert w
                                          (Props.filter keepGoal (wanted props)) }
@@ -503,10 +501,7 @@ eqAddFact eq t1 t2 fs =
 
 
 eqBindVar :: Proof -> Var -> Term -> Facts -> AddFact
-eqBindVar eq x t fs = Added RawFacts { rawEqFacts  = []
-                                     , rawLeqFacts = leqRestart
-                                     , rawFacts    = changed
-                                     }
+eqBindVar eq x t fs = Added (Props.fromList (leqRestart ++ changed))
                             Facts { factsEq   = compose su (factsEq fs)
                                   , factsLeq  = leqModel
                                   , facts     = others
@@ -534,7 +529,7 @@ leqAddFact proof t1 t2 fs =
 
          case leqReachable m2 t1 t2 of
            Nothing -> let (_,_,m3) = leqLink proof (t1,n1) (t2,n2) m2
-                      in Added noRawFacts { rawFacts = Props.toList (facts fs) }
+                      in Added (facts fs)
                                fs { factsLeq = m3, facts = Props.empty }
            Just _  -> AlreadyKnown
 
@@ -606,7 +601,7 @@ the goals because the assumptions might help us to solve the goals.
 -------------------------------------------------------------------------------}
 
 data SolverS = SolverS
-  { ssTodoFacts :: RawFacts
+  { ssTodoFacts :: Props Fact
   , ssTodoGoals :: [Goal]
   , ssSolved    :: [(EvVar,Proof)]
   , ssInerts    :: Inerts
@@ -615,14 +610,31 @@ data SolverS = SolverS
 initSolverS :: SolverS
 initSolverS = SolverS
   { ssTodoGoals = []
-  , ssTodoFacts = noRawFacts
+  , ssTodoFacts = Props.empty
   , ssSolved    = []
   , ssInerts    = noInerts
   }
 
 
+{- | When processing facts, it is more
+efficient if we first process equalities, then order and, finally, all other
+facts.  To make this easy, we store unprocessed facts as 'Prpos' instead
+of just using a list.
+
+We add equalities first because they might lead to improvements that,
+in turn, would enable the discovery of additional facts.  In particular, if a
+presently known fact gets improved, then the old fact is removed from the
+list of known facts, and its improved version is added as new work.  Thus,
+if we process equalities first, we don't need to do any of this "restarting".
+
+For similar reasons we process ordering predicates before others: they
+make it possible for certain conditional rules to fire.  For example,
+the cancellation rule for multiplication requires that the argument that
+is being cancelled is greater than 0.
+-}
+
 getFact :: SolverS -> Maybe (Fact, SolverS)
-getFact s = case getRawFact (ssTodoFacts s) of
+getFact s = case getOne (ssTodoFacts s) of
               Nothing     -> Nothing
               Just (f,fs) -> Just (f, s { ssTodoFacts = fs })
 
@@ -633,7 +645,7 @@ getGoal s = case ssTodoGoals s of
 
 nextState :: PassResult -> SolverS -> SolverS
 nextState r s =
-  SolverS { ssTodoFacts = appendRawFacts (newFacts r) (ssTodoFacts s)
+  SolverS { ssTodoFacts = Props.union (newFacts r) (ssTodoFacts s)
           , ssTodoGoals = newGoals r ++ ssTodoGoals s
           , ssInerts    = newInerts r
           , ssSolved    = solvedWanted r ++ ssSolved s
