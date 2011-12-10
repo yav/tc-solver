@@ -1,29 +1,33 @@
 module TcTypeNatsFacts where
 
 import TcTypeNatsBase
-import TcTypeNatsEq
+import TcTypeNatsEq as Subst
 import TcTypeNatsLeq
 import TcTypeNatsProps
 
 import Text.PrettyPrint
 
-{- A collection of facts. Equalities are normalized to form a substitution,
-and we inforce the invariant that this substitution is always applied to
-the remaining facts. Also, ordering predicates are grouped into a separate
-structire, the order model. -}
-
-data Facts = Facts { facts    :: Props Fact -- Excluding equality and order
-                   , factsEq  :: Subst      -- Normalized equalities
-                   , factsLeq :: LeqFacts   -- Normalized order
+{- | A collection of facts. Equalities are normalized to form a substitution.
+The substitution is always applied to the remaining facts.
+Also, ordering predicates are grouped into a separate structure,
+the order model. -}
+data Facts = Facts { facts    :: Props Fact -- ^ Excluding equality and order
+                   , factsEq  :: Subst      -- ^ Normalized equalities
+                   , factsLeq :: LeqFacts   -- ^ Normalized order
                    }
 
+-- | Convert a collection of facts to a list.
 factsToList :: Facts -> [Fact]
-factsToList fs = substToFacts (factsEq fs) ++
+factsToList fs = Subst.toFacts (factsEq fs) ++
                  leqFactsToList (factsLeq fs) ++
                  propsToList (facts fs)
 
+-- | An empty collection of facts.
 noFacts :: Facts
-noFacts = Facts { facts = noProps, factsEq = emptySubst, factsLeq = noLeqFacts }
+noFacts = Facts { facts    = noProps
+                , factsEq  = Subst.identity
+                , factsLeq = noLeqFacts
+                }
 
 instance PP Facts where
   pp fs = vcat (map pp (factsToList fs))

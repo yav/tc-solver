@@ -2,7 +2,7 @@ module TcTypeNats where
 
 import TcTypeNatsBase
 import TcTypeNatsProps
-import TcTypeNatsEq
+import TcTypeNatsEq as Subst
 import TcTypeNatsLeq
 import TcTypeNatsFacts
 import TcTypeNatsRawFacts
@@ -378,7 +378,7 @@ entails ps p =
 
            {- New facts!  We consider only the equalities. -}
            Just (Facts { factsEq = su1 }) ->
-             do eqns <- mapM newGoal $ map factProp $ substToFacts su1
+             do eqns <- mapM newGoal $ map factProp $ Subst.toFacts su1
                 case assumeGoals eqns ps of
                   Nothing  -> return NotForAny
                   Just ps1 ->
@@ -458,13 +458,13 @@ solves the old goal in terms of the new one.
 We return 'Nothing' if nothing got improved. -}
 impGoal :: Subst -> Goal -> TCN (Maybe (Goal, Proof))
 impGoal su p
-  | isEmptySubst su || propArgs p == ts  = return Nothing
+  | Subst.isIdentity su || propArgs p == ts  = return Nothing
   | otherwise = do g <- newGoal (Prop (propPred p) ts)
                    return $ Just (g, byCong (propPred p)
                                        (ts ++ propArgs p)
                                        (zipWith3 bySym (propArgs p) ts evs)
                                        (ByAsmp (goalName g)))
-  where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
+  where (evs,ts) = unzip $ map (Subst.apply su) (propArgs p)
 
 -- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
 impFact :: Subst -> Fact -> Fact
@@ -485,7 +485,7 @@ impFactChange su p = ( p { factProof = byCong (propPred p) (propArgs p ++ ts)
                      -- Indicates if something changed.
                      , not (all isRefl evs)
                      )
-  where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
+  where (evs,ts) = unzip $ map (Subst.apply su) (propArgs p)
 
 eqAddFact :: Proof -> Term -> Term -> Facts -> AddFact
 eqAddFact eq t1 t2 fs =
@@ -514,7 +514,7 @@ eqBindVar eq x t fs = Added RawFacts { rawEqFacts  = []
 
   where
   {-No need for an "occurs" check because the terms are simple (no recursion)-}
-  su                     = singleSubst x t eq
+  su                     = Subst.singleton eq x t
 
   (leqRestart, leqModel) = case leqExtract (Var x) (factsLeq fs) of
                              Nothing      -> ([], factsLeq fs)
