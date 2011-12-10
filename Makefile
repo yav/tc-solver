@@ -13,7 +13,12 @@ doc/Notes.pdf: Notes.lhs
 TcTypeNatsRules.hs: ./genRule.lhs
 	runhaskell $<
 
+.PHONY: api
+api: api/UI.html
 
+api/%.html: %.hs
+	mkdir -p api
+	haddock --html -o api $<
 
 clean:
 	rm -rf TcTypeNatsRules.hs doc html-haddock
