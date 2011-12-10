@@ -1,279 +1,21 @@
-{-# LANGUAGE CPP #-}
 module TcTypeNats where
 
-import Control.Monad(foldM,guard,MonadPlus(..),msum)
-import qualified Data.Map as M
-import qualified Data.Set as S
-import Data.List(find)
-import Data.Maybe(fromMaybe,isNothing)
-import Data.Either(partitionEithers)
-import Text.PrettyPrint
-import Data.List(zipWith5)
+import TcTypeNatsBase
+import TcTypeNatsProps
+import TcTypeNatsEq
+import TcTypeNatsLeq
+import TcTypeNatsFacts
+import TcTypeNatsRawFacts
+import TcTypeNatsRules
+import TcTypeNatsEval
+
 import Debug.Trace
+import Text.PrettyPrint
+import Data.Maybe(fromMaybe,isNothing)
+import Data.List(find)
+import Control.Monad(MonadPlus(..),guard,msum,foldM)
 
-{-------------------------------------------------------------------------------
-Terms and Propositions
--------------------------------------------------------------------------------}
 
-newtype Var = V Xi
-              deriving Show
-
-{- The 'Xi' in the 'Num' constructor stores the original 'Xi' type that
-gave rise to the number. It is there in an attempt to preserve type synonyms. -}
-
-{- The ordering model below makes assumption about this ordering:
-  - Variables should come before numbers.  This is useful because we can
-    use "fst (split 0)" to get just the variable part of the map.
-  - Number-terms should be ordered as their corresponding numbers.  This is
-    useful so that we can use "splitLookup n" to find information about
-    a number and its neighbours.
--}
-
-data Term = Var Var
-          | Num Integer (Maybe Xi)
-            deriving (Eq,Ord,Show)
-
-num :: Integer -> Term
-num n = Num n Nothing
-
-
-data Pred = Add | Mul | Exp | Leq | Eq
-            deriving (Show, Eq, Ord)
-
-arity :: Pred -> Int
-arity pr =
-  case pr of
-    Add -> 3
-    Mul -> 3
-    Exp -> 3
-    Leq -> 2
-    Eq  -> 2
-
-data Prop = Prop Pred [Term]
-            deriving (Eq,Ord)
-
-wfProp :: Prop -> Bool
-wfProp (Prop p xs) = arity p == length xs
-
-
-{-------------------------------------------------------------------------------
-Convenient access to propositions embedded inside other types
--------------------------------------------------------------------------------}
-
-class HasProp a where
-  getProp :: a -> Prop
-
-instance HasProp Prop where getProp = id
-
-propPred :: HasProp a => a -> Pred
-propPred p = case getProp p of
-               Prop x _ -> x
-
-propArgs :: HasProp a => a -> [Term]
-propArgs p = case getProp p of
-               Prop _ xs -> xs
-
-
-
-
-{-------------------------------------------------------------------------------
-Collections of Entities with Propositions
-
-Throughout the development we work with collections of propositions.
-One way to represent such collections is, simply, to use linked lists.
-However, because we often need to search for propositions
-of a certain form, it is more convenient (and efficient) to group
-propositions with the same predicate constructor together.
--------------------------------------------------------------------------------}
-
--- | We use a finite map that maps predicate constructors to the
--- entities containing propositions with the corresponding constructor.
-newtype Props a = P (M.Map Pred (S.Set a))
-
--- | Convert a set of propositions back into its list representation.
-propsToList :: Ord a => Props a -> [a]
-propsToList (P ps) = S.toList $ S.unions $ M.elems ps
-
--- | An empty set of propositions.
-noProps :: Props a
-noProps = P M.empty
-
--- | Add a proposition to an existing set.
-insertProps :: (Ord a, HasProp a) => a -> Props a -> Props a
-insertProps p (P ps) = P (M.insertWith S.union (propPred p) (S.singleton p) ps)
-
--- | Convert a list of propositions into a set.
-propsFromList :: (Ord a, HasProp a) => [a] -> Props a
-propsFromList = foldr insertProps noProps
-
--- | Combine the propositions from two sets.
-unionProps :: Ord a => Props a -> Props a -> Props a
-unionProps (P as) (P bs) = P (M.unionWith S.union as bs)
-
--- | Pick one of the propositions from a set
--- and return the remaining propositions.
--- Returns 'Nothing' if the set is empty.
-getOne :: Props a -> Maybe (a, Props a)
-getOne (P ps) =
-  do ((op,terms),qs) <- M.minViewWithKey ps
-     (t,ts)          <- S.minView terms
-     return (t, if S.null ts then P qs else P (M.insert op ts qs))
-
--- | Get the arguments of propositions constructed with a given
--- predicate constructor.
-getPropsFor :: Pred -> Props a -> [a]
-getPropsFor op (P ps) = S.toList (M.findWithDefault S.empty op ps)
-
--- | Like 'getPropsFor' but selecting 2 distinct propositions at a time.
--- We return all permutations of the proporsitions.
-getPropsFor2 :: Pred -> Props a -> [(a,a)]
-getPropsFor2 op ps =
-  do (a,as) <- choose $ getPropsFor op ps
-     b      <- as
-     return (a,b)
-
--- | Like 'getPropsFor' but selecting 3 distinct propositions at a time.
--- We return all permutations of the proporsitions.
-getPropsFor3 :: Pred -> Props a -> [(a,a,a)]
-getPropsFor3 op ps =
-  do (a,as) <- choose $ getPropsFor op ps
-     (b,bs) <- choose as
-     c      <- bs
-     return (a,b,c)
-
-
--- | Returns 'True' if the set is empty.
-isEmptyProps :: Props a -> Bool
-isEmptyProps (P ps) = M.null ps
-
--- | Remove propositions that do not satisfy the given predicate.
-filterProps :: (Ord a, HasProp a) => (a -> Bool) -> Props a -> Props a
-filterProps p (P ps) = P (M.mapMaybeWithKey upd ps)
-  where upd _ ts = let xs = S.filter p ts
-                   in if S.null xs then Nothing else Just xs
-
-{- Apply a function to all memerbs, and keep only the ones that do
-not change (i.e., the parameter returns 'Nothing').  The new values
-of the members that did change are returned in a list. -}
-
-mapExtract :: (Ord a, HasProp a) =>
-              (a -> Maybe a) -> Props a -> ([a], Props a)
-mapExtract f ps = case partitionEithers $ map apply $ propsToList ps of
-                    (remains,changed) -> (changed, propsFromList remains)
-  where apply x = case f x of
-                    Nothing -> Left x
-                    Just a  -> Right a
-
-
-{-------------------------------------------------------------------------------
-Assumptions and Goals
-
-The solver manipulates two kinds of propositions: {\em given} propositions
-correspond to assumptions that have known proofs,
-while {\em wanted} propositions correspond to goals that need to be proved.
--------------------------------------------------------------------------------}
-
-data Goal = Goal { goalName  :: EvVar, goalProp :: Prop }
-            deriving (Eq,Ord)
-
-data Fact = Fact { factProof :: Proof, factProp :: Prop }
-
-instance HasProp Goal where getProp = goalProp
-instance HasProp Fact where getProp = factProp
-
-
-{- We compare facts based only on the property they state because we are
-not interested in facts that state the same thing but differ in the proof. -}
-
-instance Eq Fact where
-  x == y = factProp x == factProp y
-
-instance Ord Fact where
-  compare x y = compare (factProp x) (factProp y)
-
-
---------------------------------------------------------------------------------
-
-{- A collection of unprocessed facts.  When processing facts, it is more
-efficient if we first process equalities, then orider and, finally, all other
-facts.  To make this easy, we store unprocessed facts as 'RawFacts' instead
-of just using [Fact].
-
-We add equalities first because they might lead to improvements that,
-in turn, would enable the discovery of additional facts.  In particular, if a
-presently known fact gets improved, then the old fact is removed from the
-list of known facts, and its improved version is added as new work.  Thus,
-if we process equalities first, we don't need to do any of this "restarting".
-
-For similar reasons we process ordering predicates before others: they
-make it possible for certain conditional rules to fire.  For example,
-the cancellation rule for multiplication requires that the argument that
-is being cancelled is greater than 0.
- -}
-
-data RawFacts = RawFacts { rawEqFacts  :: [Fact]
-                         , rawLeqFacts :: [Fact]
-                         , rawFacts    :: [Fact]
-                         }
-
-noRawFacts :: RawFacts
-noRawFacts = RawFacts { rawEqFacts  = []
-                      , rawLeqFacts = []
-                      , rawFacts    = []
-                      }
-
-insertRawFact :: Fact -> RawFacts -> RawFacts
-insertRawFact f fs = case propPred f of
-                       Eq  -> fs { rawEqFacts  = f : rawEqFacts fs }
-                       Leq -> fs { rawLeqFacts = f : rawLeqFacts fs }
-                       _   -> fs { rawFacts    = f : rawFacts fs }
-
-oneRawFact :: Fact -> RawFacts
-oneRawFact f = insertRawFact f noRawFacts
-
-appendRawFacts :: RawFacts -> RawFacts -> RawFacts
-appendRawFacts fs1 fs2 =
-  RawFacts { rawEqFacts  = rawEqFacts  fs1 ++ rawEqFacts  fs2
-           , rawLeqFacts = rawLeqFacts fs1 ++ rawLeqFacts fs2
-           , rawFacts    = rawFacts    fs1 ++ rawFacts    fs2
-           }
-
-getRawFact :: RawFacts -> Maybe (Fact, RawFacts)
-getRawFact fs =
-  case rawEqFacts fs of
-    e : es -> return (e, fs { rawEqFacts = es })
-    []     -> case rawLeqFacts fs of
-                l : ls -> return (l, fs { rawLeqFacts = ls })
-                []     -> case rawFacts fs of
-                            o : os -> return (o, fs { rawFacts = os })
-                            []     -> Nothing
-
-rawFactsFromList :: [Fact] -> RawFacts
-rawFactsFromList = foldr insertRawFact noRawFacts
-
-rawFactsToList :: RawFacts -> [Fact]
-rawFactsToList fs = rawEqFacts fs ++ rawLeqFacts fs ++ rawFacts fs
---------------------------------------------------------------------------------
-
-
-
-{- A collection of facts. Equalities are normalized to form a substitution,
-and we inforce the invariant that this substitution is always applied to
-the remaining facts. Also, ordering predicates are grouped into a separate
-structire, the order model. -}
-
-data Facts = Facts { facts    :: Props Fact -- Excluding equality and order
-                   , factsEq  :: Subst      -- Normalized equalities
-                   , factsLeq :: LeqFacts   -- Normalized order
-                   }
-
-factsToList :: Facts -> [Fact]
-factsToList fs = substToFacts (factsEq fs) ++
-                 leqFactsToList (factsLeq fs) ++
-                 propsToList (facts fs)
-
-noFacts :: Facts
-noFacts = Facts { facts = noProps, factsEq = emptySubst, factsLeq = noLeqFacts }
 
 {- 'addFact' attempts to extend a collection of already known facts.
 The resulting value contains information about how the new fact
@@ -319,11 +61,10 @@ Using Existing Goals
 -------------------------------------------------------------------------------}
 
 assumeGoals :: MonadPlus m => [Goal] -> Facts -> m Facts
-assumeGoals as bs = liftMb
+assumeGoals as bs = maybe mzero return
                   $ addFactsTrans bs
                   $ rawFactsFromList
                   $ map goalToFact as
-
 
 {- The function 'goalToFact' is used when we attempt to solve a new goal
 in terms of already existing goals. -}
@@ -360,115 +101,6 @@ addFactsTrans fs facts0 =
     Just x  -> trace (show (pp x)) $ Just x
 
 
-
-{-------------------------------------------------------------------------------
-Proofs and Theorems
--------------------------------------------------------------------------------}
-
-data Theorem  = EqRefl      -- forall a.                        a = a
-              | EqSym       -- forall a b.   (a = b)         => b = a
-              | EqTrans     -- forall a b c. (a = b, b = c)  => a = c
-              | Cong Pred   -- forall xs ys. (xs = ys, F xs) => F ys
-
-              | LeqRefl     -- forall a.                         a <= a
-              | LeqAsym     -- forall a b.   (a <= b, b <= a) => a = b
-              | LeqTrans    -- forall a b c. (a <= b, b <= c) => a <= c
-              | Leq0        -- forall a.                         0 <= a
-
-              | DefAdd Integer Integer Integer
-              | DefMul Integer Integer Integer
-              | DefExp Integer Integer Integer
-              | DefLeq Integer Integer
-
-              | AddLeq
-              | MulLeq
-              | ExpLeq1
-              | ExpLeq2
-              | Add0 | Mul0 | Mul1 | Root0 | Root1 | Log1
-              | AddComm | MulComm
-              | SubL | SubR | DivL | DivR | Root | Log
-              | MulGrowL | MulGrowR | ExpGrow
-              | AddAssoc | MulAssoc | AddMul | MulExp | ExpAdd | ExpMul
-              | AddAssocSym | MulAssocSym | AddMulSym
-              | MulExpSym | ExpAddSym | ExpMulSym
-              | FunAdd | FunMul | FunExp
-                deriving Show
-
-data Proof    = ByAsmp EvVar
-              | Using Theorem [Term] [Proof]   -- Instantiation, sub-proofs
-                deriving Show
-
-byRefl :: Term -> Proof
-byRefl t = Using EqRefl [t] []
-
-isRefl :: Proof -> Bool
-isRefl (Using EqRefl _ _) = True
-isRefl _ = False
-
-bySym :: Term -> Term -> Proof -> Proof
-bySym _ _ p@(Using EqRefl _ _) = p
-bySym _ _ (Using EqSym _ [p]) = p
-bySym t1 t2 p = Using EqSym [t1,t2] [p]
-
-byTrans :: Term -> Term -> Term -> Proof -> Proof -> Proof
--- byTrans t1 t2 _ p1 p2 = byCong Eq [ bySym t1 t2 p1, p2 ] (byRefl t2)
--- (r = s, s = t) => r = t
--- cong = (s = r, s = t, s = s
-byTrans _ _ _ (Using EqRefl _ _) p = p
-byTrans _ _ _ p (Using EqRefl _ _) = p
-byTrans t1 t2 t3 p1 p2 = Using EqTrans [t1,t2,t3] [p1,p2]
-
-
-byLeqDef :: Integer -> Integer -> Proof
-byLeqDef x y = Using (DefLeq x y) [] []
-
-byLeqRefl :: Term -> Proof
-byLeqRefl t = Using LeqRefl [t] []
-
-byLeqTrans :: Term -> Term -> Term -> Proof -> Proof -> Proof
-byLeqTrans _ _ _ (Using LeqRefl _ _) p = p
-byLeqTrans _ _ _ p (Using LeqRefl _ _) = p
-byLeqTrans t1 t2 t3 p1 p2 = Using LeqTrans [t1,t2,t3] [p1,p2]
-
-byLeqAsym :: Term -> Term -> Proof -> Proof -> Proof
-byLeqAsym t1 t2 p1 p2 = Using LeqAsym [t1,t2] [p1,p2]
-
-byLeq0 :: Term -> Proof
-byLeq0 t = Using Leq0 [t] []
-
-
--- (x1 = y1, x2 = y2, P x1 x2) => P y1 y2
-byCong :: Pred -> [Term] -> [Proof] -> Proof -> Proof
-byCong _ _ qs q | all isRefl qs = q
-
--- (x1 == y1, x2 == y2, x1 == x2) => y1 = y2
-byCong Eq [x1,x2,y1,y2] [ xy1, xy2 ] xx =
-                  byTrans y1 x2 y2 (byTrans y1 x1 x2 (bySym x1 y1 xy1) xx) xy2
--- (p1: x1 = y1, p2: x2 = y2,
---     byCong (q1 : a1 = x1) (q2 : a2 = x2) (q : F z1 z2) : F y1 y2)
--- => byCong F (as ++ ys) (trans q1 p1, trans q2 p2) q
-byCong p ts ps (Using (Cong _) us qs0) =
-  let qs = init qs0
-      q  = last qs0
-
-      as      = take (arity p) us
-      (xs,ys) = splitAt (arity p) ts
-
-  in byCong p (as ++ ys) (zipWith5 byTrans as xs ys qs ps) q
-
-byCong p ts qs q = Using (Cong p) ts (qs ++ [q])
-
-
-proofLet :: EvVar -> Proof -> Proof -> Proof
-proofLet x p1 (ByAsmp y) | x == y     = p1
-                         | otherwise  = ByAsmp y
-proofLet x p1 (Using EqTrans [t1,t2,t3] [s1,s2]) =
-  byTrans t1 t2 t3 (proofLet x p1 s1) (proofLet x p1 s2)
-proofLet x p1 (Using EqSym [t1,t2] [s1]) =
-  bySym t1 t2 (proofLet x p1 s1)
-proofLet x p1 (Using (Cong p) ts ss) = byCong p ts (init ss1) (last ss1)
-  where ss1 = map (proofLet x p1) ss
-proofLet x p1 (Using t ts ps) = Using t ts (map (proofLet x p1) ps)
 
 {-------------------------------------------------------------------------------
 Results of Entailement
@@ -821,32 +453,39 @@ enatils_all_prop p ps q =
     _ -> return ()
 
 
-{- Substitutions With Evidence -}
+{- Given a goal, return a new goal, and a proof which
+solves the old goal in terms of the new one.
+We return 'Nothing' if nothing got improved. -}
+impGoal :: Subst -> Goal -> TCN (Maybe (Goal, Proof))
+impGoal su p
+  | isEmptySubst su || propArgs p == ts  = return Nothing
+  | otherwise = do g <- newGoal (Prop (propPred p) ts)
+                   return $ Just (g, byCong (propPred p)
+                                       (ts ++ propArgs p)
+                                       (zipWith3 bySym (propArgs p) ts evs)
+                                       (ByAsmp (goalName g)))
+  where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
 
-{- The proof asserts that the variable (as a term) is equal to the term. -}
-newtype Subst  = Subst (M.Map Var (Term, Proof))
+-- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
+impFact :: Subst -> Fact -> Fact
+impFact su p = fst (impFactChange su p)
 
-substToFacts :: Subst -> [Fact]
-substToFacts (Subst m) = [ Fact { factProp  = Prop Eq [Var x, t]
-                                , factProof = ev
-                                } | (x,(t,ev)) <- M.toList m ]
+impFactMb :: Subst -> Fact -> Maybe Fact
+impFactMb su p = case impFactChange su p of
+                   (_,False)  -> Nothing
+                   (fact1,_)  -> Just fact1
 
-substDom :: Subst -> [Var]
-substDom (Subst m) = M.keys m
+-- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
+impFactChange :: Subst -> Fact -> (Fact, Bool)
+impFactChange su p = ( p { factProof = byCong (propPred p) (propArgs p ++ ts)
+                                                           evs (factProof p)
+                         , factProp  = Prop (propPred p) ts
+                         }
 
-emptySubst :: Subst
-emptySubst = Subst M.empty
-
-isEmptySubst :: Subst -> Bool
-isEmptySubst (Subst m) = M.null m
-
-singleSubst :: Var -> Term -> Proof -> Subst
-singleSubst x t e = Subst (M.singleton x (t,e))
-
-compose :: Subst -> Subst -> Subst
-compose s2@(Subst m2) (Subst m1) = Subst (M.union (M.mapWithKey ap2 m1) m2)
-  where ap2 x (t,p1) = let (t2,p2) = apSubst s2 t
-                       in (t2, byTrans (Var x) t t2 p1 p2)
+                     -- Indicates if something changed.
+                     , not (all isRefl evs)
+                     )
+  where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
 
 eqAddFact :: Proof -> Term -> Term -> Facts -> AddFact
 eqAddFact eq t1 t2 fs =
@@ -883,251 +522,6 @@ eqBindVar eq x t fs = Added RawFacts { rawEqFacts  = []
 
   (changed, others)      = mapExtract (impFactMb su) (facts fs)
 
-{- The returned proof asserts that the original term and the term with
-the substitution applied are equal.
-For example: apSubst [ ("x", 3, ev) ] "x" == (3, ev)
-
-Here we work with only very simple proofs.  For more complex terms,
-the proofs would also need to use congruence.
--}
-
-apSubst :: Subst -> Term -> (Term, Proof)
-apSubst (Subst m) (Var x) | Just res <- M.lookup x m  = res
-apSubst _ t = (t, byRefl t)
-
-{- Given a goal, return a new goal, and a proof which
-solves the old goal in terms of the new one.
-We return 'Nothing' if nothing got improved. -}
-impGoal :: Subst -> Goal -> TCN (Maybe (Goal, Proof))
-impGoal su p
-  | isEmptySubst su || propArgs p == ts  = return Nothing
-  | otherwise = do g <- newGoal (Prop (propPred p) ts)
-                   return $ Just (g, byCong (propPred p)
-                                       (ts ++ propArgs p)
-                                       (zipWith3 bySym (propArgs p) ts evs)
-                                       (ByAsmp (goalName g)))
-  where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
-
--- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
-impFact :: Subst -> Fact -> Fact
-impFact su p = fst (impFactChange su p)
-
-impFactMb :: Subst -> Fact -> Maybe Fact
-impFactMb su p = case impFactChange su p of
-                   (_,False)  -> Nothing
-                   (fact1,_)  -> Just fact1
-
--- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
-impFactChange :: Subst -> Fact -> (Fact, Bool)
-impFactChange su p = ( p { factProof = byCong (propPred p) (propArgs p ++ ts)
-                                                           evs (factProof p)
-                         , factProp  = Prop (propPred p) ts
-                         }
-
-                     -- Indicates if something changed.
-                     , not (all isRefl evs)
-                     )
-  where (ts,evs) = unzip $ map (apSubst su) (propArgs p)
-
-
-
-{-------------------------------------------------------------------------------
-Reasoning About Order
--------------------------------------------------------------------------------}
-
-{- To reason about order, we store the information about related terms
-as a graph: the nodes are terms, and the edges are labelled with proofs,
-providing evidence of the relation between the terms.
--}
-
-
-data LeqEdge = LeqEdge { leProof :: Proof, leTarget :: Term }
-               deriving Show
-
-instance Eq LeqEdge where
-  x == y  = leTarget x == leTarget y
-
-instance Ord LeqEdge where
-  compare x y = compare (leTarget x) (leTarget y)
-
-data LeqEdges = LeqEdges { lnAbove :: S.Set LeqEdge -- proof: here   <= above
-                         , lnBelow :: S.Set LeqEdge -- proof: bellow <= here
-                         } deriving Show
-
-leqNodeFacts :: Term -> LeqEdges -> [Fact]
-leqNodeFacts x es = toFacts lnBelow lowerFact ++ toFacts lnAbove upperFact
-  where
-  toFacts list f = map f $ S.toList $ list es
-
-  upperFact f    = Fact { factProp  = Prop Leq [x, leTarget f]
-                        , factProof = leProof f
-                        }
-
-  lowerFact f    = Fact { factProp  = Prop Leq [leTarget f, x]
-                        , factProof = leProof f
-                        }
-
-noLeqEdges :: LeqEdges
-noLeqEdges = LeqEdges { lnAbove = S.empty, lnBelow = S.empty }
-
-newtype LeqFacts = LM (M.Map Term LeqEdges)
-                   deriving Show
-
-noLeqFacts :: LeqFacts
-noLeqFacts = LM M.empty
-
-leqFactsToList :: LeqFacts -> [Fact]
-leqFactsToList (LM m) =
-  do (from,edges) <- M.toList m
-     edge         <- S.toList (lnAbove edges)
-     let to = leTarget edge
-     guard (not (triv from to))
-     return Fact { factProof = leProof edge, factProp = Prop Leq [ from, to ] }
-
-  where triv (Num {}) (Num {}) = True
-        triv (Num 0 _) _       = True
-        triv _       _         = False
-
-
-
-leqImmAbove :: LeqFacts -> Term -> S.Set LeqEdge
-leqImmAbove (LM m) t = case M.lookup t m of
-                         Just edges -> lnAbove edges
-                         Nothing    -> S.empty
-
-
-leqReachable :: LeqFacts -> Term -> Term -> Maybe Proof
-leqReachable m smaller larger =
-  search S.empty (S.singleton LeqEdge { leProof  = byLeqRefl smaller
-                                      , leTarget = smaller })
-  where
-  search visited todo =
-    do (LeqEdge { leProof = proof, leTarget = term }, rest) <- S.minView todo
-       if term == larger
-          then return proof
-          else let updProof e = e { leProof = byLeqTrans
-                                                smaller
-                                                term
-                                                (leTarget e)
-                                                proof
-                                                (leProof e) }
-
-                   new     = S.mapMonotonic updProof (leqImmAbove m term)
-                   vis     = S.insert term visited
-                   notDone = S.filter (not . (`S.member` vis) . leTarget)
-          in search vis (notDone new `S.union` notDone rest)
-
-
-
-
-{-
-
-This diagram illustrates what we do when we link two nodes (leqLink).
-
-We start with a situation like on the left, and we are adding an
-edge from L to U.  The final result is illustrated on the right.
-
-   Before    After
-
-     a         a
-    /|        /
-   / |       /
-  U  |      U\
-  |  L        \L
-  | /         /
-  |/         /
-  d         d
-
-L: lower
-U: upper
-a: a member of "lnAbove uedges"  (uus)
-d: a member of "lnBelow ledges"  (lls)
--}
-
-
-
-leqLink :: Proof -> (Term,LeqEdges) -> (Term,LeqEdges) -> LeqFacts ->
-                                                  (LeqEdges,LeqEdges,LeqFacts)
-
-leqLink proof (lower, ledges) (upper, uedges) (LM m) =
-
-  let uus         = S.mapMonotonic leTarget (lnAbove uedges)
-      lls         = S.mapMonotonic leTarget (lnBelow ledges)
-
-      newLedges   = ledges { lnAbove =
-                               S.insert (LeqEdge { leProof  = proof
-                                                 , leTarget = upper
-                                                 })
-                               $ S.filter (not . (`S.member` uus) . leTarget)
-                               $ lnAbove ledges
-                           }
-      newUedges   = uedges { lnBelow =
-                               S.insert (LeqEdge { leProof  = proof
-                                                 , leTarget = lower
-                                                 })
-                               $ S.filter (not . (`S.member` lls) . leTarget)
-                               $ lnBelow uedges
-                           }
-
-{- The "undefined" in 'del' is OK because the proofs are not used in the
-comparison and the set API seems to lack a function to get the same behavior.
-Note that filter-ing is a little different because it has to traverse the
-whole set while here we stop as soon as we found the element that is
-to be removed. -}
-
-      del x       = S.delete LeqEdge { leTarget = x, leProof = undefined }
-
-
-      adjAbove    = M.adjust (\e -> e { lnAbove = del upper (lnAbove e) })
-      adjBelow    = M.adjust (\e -> e { lnBelow = del lower (lnBelow e) })
-      fold f xs x = S.fold f x xs
-
-  in ( newLedges
-     , newUedges
-     , LM $ M.insert lower newLedges
-          $ M.insert upper newUedges
-          $ fold adjAbove lls
-          $ fold adjBelow uus
-            m
-     )
-
-leqInsNode :: Term -> LeqFacts -> (LeqEdges, LeqFacts)
-leqInsNode t model@(LM m0) =
-  case M.splitLookup t m0 of
-    (_, Just r, _)  -> (r, model)
-    (left, Nothing, right) ->
-      let new           = noLeqEdges
-          ans1@(es1,m1) = ( new, LM (M.insert t new m0) )
-      in case t of
-           Var _ ->
-             -- link to 0
-             let zero         = num 0
-                 (zes,zm)     = leqInsNode zero m1    -- Should not modify es1
-                 (_, es2, m2) = leqLink (byLeq0 t) (zero,zes) (t,es1) zm
-             in (es2, m2)
-           Num m _ ->
-             -- link to a smaller constnat, if any
-             let ans2@(es2, m2) =
-                   case toNum M.findMax left of
-                     Nothing -> ans1
-                     Just (n,l)  ->
-                       let (_,x,y) = leqLink (byLeqDef n m) l (t,es1) m1
-                       in (x,y)
-             -- link to a larger constant, if any
-             in case toNum M.findMin right of
-                  Nothing -> ans2
-                  Just (n,u)  ->
-                    let (x,_,y) = leqLink (byLeqDef m n) (t,es2) u m2
-                    in (x,y)
-
-  where
-  toNum f x = do guard (not (M.null x))
-                 let r = f x
-                 case fst r of
-                   Num n _ -> return (n,r)
-                   _       -> Nothing
-
-
 leqAddFact :: Proof -> Term -> Term -> Facts -> AddFact
 leqAddFact proof t1 t2 fs =
   let m0        = factsLeq fs
@@ -1152,45 +546,6 @@ leqAddFact proof t1 t2 fs =
               }
 
 
-leqFactsAffectedBy :: LeqFacts -> Subst -> Bool
-leqFactsAffectedBy (LM m) = any affects . substDom
-  where affects x = case M.lookup (Var x) (fst (M.split (num 0) m)) of
-                      Nothing -> False
-                      _       -> True
-
-leqProve :: LeqFacts -> Term -> Term -> Maybe Proof
-leqProve model s t =
-  let (_,m1) = leqInsNode s model
-      (_,m2) = leqInsNode t m1
-  in leqReachable m2 s t
-
-
-{- Remove the term from the model, and return the facts immediately
-associated with ot.
-
-This is useful when we want to improve a term: we remove it from the model,
-improve the associated facts, and then add them back.
--}
-leqExtract :: Term -> LeqFacts -> Maybe ([Fact], LeqFacts)
-leqExtract term (LM m) =
-  case M.updateLookupWithKey (\_ _ -> Nothing) term m of
-    (Nothing, _)  -> Nothing
-    (Just es, m1) -> Just
-      ( leqNodeFacts term es
-      , LM $ fold adjAbove (nodes lnBelow es)
-           $ fold adjBelow (nodes lnAbove es) m1
-      )
-  where
-  del         = S.delete LeqEdge { leTarget = term, leProof = undefined }
-  adjAbove    = M.adjust (\e -> e { lnAbove = del (lnAbove e) })
-  adjBelow    = M.adjust (\e -> e { lnBelow = del (lnBelow e) })
-  nodes f es  = S.mapMonotonic leTarget (f es)
-  fold f xs x = S.fold f x xs
-
-leqContains :: LeqFacts -> Term -> Bool
-leqContains (LM m) t = case M.lookup t m of
-                         Nothing -> False
-                         Just _  -> True
 
 --------------------------------------------------------------------------------
 
@@ -1209,12 +564,6 @@ byAsmp ps p =
 Testing without GHC
 -------------------------------------------------------------------------------}
 
-#define TEST_WITHOUT_GHC 1
-#ifdef TEST_WITHOUT_GHC
-
-type Xi    = String
-type EvVar = String
-
 newtype TCN a = T { runTCN :: String -> Int -> Maybe (a,Int) }
 
 instance Functor TCN where
@@ -1231,12 +580,6 @@ instance MonadPlus TCN where
   mzero = T (\_ _ -> Nothing)
   mplus = error "mplus is unused"
 
-
-eqType :: Xi -> Xi -> Bool
-eqType = (==)
-
-cmpType :: Xi -> Xi -> Ordering
-cmpType = compare
 
 newGoal :: Prop -> TCN Goal
 newGoal p = T $ \r s ->
@@ -1317,244 +660,20 @@ addWorkItemsM ss0 =
 
        Nothing -> return ss0
 
-#else
---------------------------------------------------------------------------------
-
-{- Inetrface with GHC's solver -}
-
--- We keep the original type in numeric constants to preserve type synonyms.
-toTerm :: Xi -> Term
-toTerm xi = case mplus (isNumberTy xi) (isNumberTy =<< tcView xi) of
-              Just n -> Num n (Just xi)
-              _      -> Var xi
-
-toProp :: CanonicalCt -> Prop
-toProp (CDictCan { cc_class = c, cc_tyargs = xis })
-  | className c == lessThanEqualClassName = Prop Leq (map toTerm xis)
-
-toProp (CFunEqCan { cc_fun = tc, cc_tyargs = xis, cc_rhs = xi2 })
-  | tyConName tc == addTyFamName = Prop Add (ts ++ [t])
-  | tyConName tc == mulTyFamName = Prop Mul (ts ++ [t])
-  | tyConName tc == expTyFamName = Prop Exp (ts ++ [t])
-
-    where ts = map toTerm xis
-          t  = toTerm xi2
-
-toProp p = panic $
-  "[TcTypeNats.toProp] Unexpected CanonicalCt: " ++ showSDoc (ppr p)
-
-
-toInert :: CanonicalCts -> CanonicalCts -> Inerts
-toInert gs ws = SolverProps { given  = listToProps (bagToList gs)
-                            , wanted = listToProps (bagToList ws)
-                            }
-
-
-
-fromTerm :: Term -> Xi
-fromTerm (Num n mb) = fromMaybe (mkNumberTy n) mb
-fromTerm (Var xi)   = xi
-
-
-data CvtProp  = CvtClass Class [Type]
-              | CvtCo Type Type
-
-fromProp :: Prop -> TcS CvtProp
-fromProp (Prop p ts) =
-  case p of
-    Leq -> do cl <- tcsLookupClass lessThanEqualClassName
-              return (CvtClass cl (map fromTerm ts))
-    Eq -> case ts of
-            [t1,t2] -> return $ CvtCo (fromTerm t1) (fromTerm t2)
-            _ -> panic $ "[TcTypeNats.fromProp] Malformed Eq prop"
-
-    Add -> mkFun `fmap` tcsLookupTyCon addTyFamName
-    Mul -> mkFun `fmap` tcsLookupTyCon mulTyFamName
-    Exp -> mkFun `fmap` tcsLookupTyCon expTyFamName
-
-  where mkFun tc = do let ts1 = map fromTerm ts
-                      return $ CvtCo (mkTyConApp tc (init ts1)) (last ts1)
-
-newSubGoal :: CvtProp -> TcS EvVar
-newSubGoal (CvtClass c ts) = newDictVar c ts
-newSubGoal (CvtCo t1 t2)   = newCoVar t1 t2
-
-newFact :: CvtProp -> TcS EvVar
-newFact prop =
-  do d <- newSubGoal prop
-     defineDummy d prop
-     return d
-
-
--- If we decided that we want to generate evidence terms,
--- here we would set the evidence properly.  For now, we skip this
--- step because evidence terms are not used for anything, and they
--- get quite large, at least, if we start with a small set of axioms.
-defineDummy :: EvVar -> CvtProp -> TcS ()
-defineDummy d (CvtClass c ts) =
-  setDictBind d $ EvAxiom "<=" $ mkTyConApp (classTyCon c) ts
-
-defineDummy c (CvtCo t1 t2) =
-  setCoBind c (mkUnsafeCo t1 t2)
-
-
-data NumericsResult = NumericsResult
-  { numNewWork :: WorkList
-  , numInert   :: Maybe CanonicalCts   -- Nothing for "no change"
-  , numNext    :: Maybe CanonicalCt
-  }
-
-
-toNumericsResult :: CanonicalCt -> Maybe PassResult -> TcS NumericsResult
-toNumericsResult prop Nothing = impossible prop
-toNumericsResult prop (Just res) =
-  return NumericsResult
-    { numNext = if consumed res then Nothing else prop
-    }
-
-
-impossible :: CanonicalCt -> TcS NumericsResult
-impossible c =
-  do numTrace "Impossible" empty
-     let err = mkFrozenError (cc_flavor c) (cc_id c)
-     return NumericsResult
-       { numNext = Just err, numInert = Nothing, numNewWork = emptyWorkList }
-
-
--- XXX: What do we do with "derived"?
-canonicalNum :: CanonicalCts -> CanonicalCts -> CanonicalCts -> CanonicalCt ->
-                TcS NumericsResult
-canonicalNum given derived wanted prop0 =
-  let inert = toInert given wanted
-      new   = toProp prop0
-  in case cc_flavor prop of
-       Wanted {}   -> toNumericsResult prop0 $ addWanted inert new
-       Derived {}  -> doNothing
-       Given {}    -> toNumericsResult prop0 $ addGiven inert new
-
-  where
-  -- Disables the solver.
-  doNothing = return NumericsResult { numInert    = Nothing
-                                    , numNewWork  = emptyWorkList
-                                    , numNext     = Just prop0
-                                    }
-
-
-#endif
-
-{-------------------------------------------------------------------------------
-Functions on natural numbers.
--------------------------------------------------------------------------------}
-
-minus :: Integer -> Integer -> Maybe Integer
-minus x y = if x >= y then Just (x - y) else Nothing
-
-descreteRoot :: Integer -> Integer -> Maybe Integer
-descreteRoot x0 root = search 0 x0
-  where
-  search from to = let x = from + div (to - from) 2
-                       a = x ^ root
-                   in case compare a x0 of
-                        EQ              -> Just x
-                        LT | x /= from  -> search x to
-                        GT | x /= to    -> search from x
-                        _               -> Nothing
-
-descreteLog :: Integer -> Integer -> Maybe Integer
-descreteLog 0  _  = Just 0
-descreteLog x0 base | base == x0  = Just 1
-descreteLog x0 base = case divMod x0 base of
-                         (x,0) -> fmap (1+) (descreteLog x base)
-                         _     -> Nothing
-
-divide :: Integer -> Integer -> Maybe Integer
-divide _ 0  = Nothing
-divide x y  = case divMod x y of
-                (a,0) -> Just a
-                _     -> Nothing
-
 {-------------------------------------------------------------------------------
 Pretty Printing
 -------------------------------------------------------------------------------}
 
-class PP a where
-  pp :: a -> Doc
 
-instance PP Var where
-  pp (V x) = text x
-
-instance PP Term where
-  pp (Var x)    = pp x
-  pp (Num x _)  = integer x
-
-instance PP Pred where
-  pp op =
-    case op of
-      Add -> text "+"
-      Mul -> text "*"
-      Exp -> text "^"
-      Leq -> text "<="
-      Eq  -> text "=="
-
-instance PP Prop where
-
-  pp (Prop op [t1,t2,t3])
-    | op == Add || op == Mul || op == Exp =
-      pp t1 <+> pp op <+> pp t2 <+> text "==" <+> pp t3
-
-  pp (Prop op [t1,t2])
-    | op == Leq || op == Eq = pp t1 <+> pp op <+> pp t2
-
-  pp (Prop op ts) = pp op <+> fsep (map pp ts)
-
-
-instance PP Fact where
-  pp f = text "G:" <+> pp (factProp f)
-
-instance PP Goal where
-  pp f = text "W:" <+> pp (goalProp f)
-
-
-instance PP Proof where
-  pp (ByAsmp e) = text e
-  pp (Using x ts ps) = text (show x) <> inst $$ nest 2 (vcat (map pp ps))
-    where inst = case ts of
-                   [] -> empty
-                   _  -> text "@" <> parens (fsep $ punctuate comma $ map pp ts)
-
-instance (Ord a, PP a) => PP (Props a) where
-  pp = vcat . map pp . propsToList
 
 
 instance PP Inerts where
   pp is = pp (given is) $$ pp (wanted is)
 
-instance PP Facts where
-  pp fs = vcat (map pp (factsToList fs))
-
-instance PP LeqFacts where
-  pp = vcat . map pp . leqFactsToList
-
 
 {-------------------------------------------------------------------------------
 Misc.
 -------------------------------------------------------------------------------}
-
-instance Eq Var where
-  V x == V y  = eqType x y
-
-instance Ord Var where
-  compare (V x) (V y) = cmpType x y
-
--- | Choce an element from a list in all possible ways.
-choose :: [a] -> [(a,[a])]
-choose []     = []
-choose (x:xs) = (x,xs) : [ (y, x:ys) | (y,ys) <- choose xs ]
-
-liftMb :: MonadPlus m => Maybe a -> m a
-liftMb mb = case mb of
-              Nothing -> mzero
-              Just a  -> return a
 
 ppTrace :: Doc -> a -> a
 ppTrace d = trace (show d)
@@ -1562,6 +681,5 @@ ppTrace d = trace (show d)
 gTrace :: Doc -> Bool
 gTrace d = ppTrace d False
 
-#include "TcTypeNatsRules.hs"
 
 

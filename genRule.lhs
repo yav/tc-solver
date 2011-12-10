@@ -1276,6 +1276,15 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >   $$ text "--"
 >   $$ vsep (map ppFStats $ M.toList groupedFs)
 >   $$ text "--"
+>   $$ text "module TcTypeNatsRules where"
+>   $$ vcat [ text "import" <+> text m | m <- [ "TcTypeNatsBase"
+>                                             , "TcTypeNatsFacts"
+>                                             , "TcTypeNatsLeq"
+>                                             , "TcTypeNatsProps"
+>                                             , "TcTypeNatsEval"
+>                                             , "Control.Monad(mzero)"
+>                                             ]
+>          ]
 >   $$ text "-- Back rules"
 >   $$ vsep (map solveFun solveFuns)
 >   $$ text "\n\n-- Forward rules"

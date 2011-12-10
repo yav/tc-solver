@@ -16,6 +16,10 @@ import System.Info
 import Text.PrettyPrint hiding (char)
 
 
+import TcTypeNatsBase
+import TcTypeNatsRawFacts
+import TcTypeNatsFacts
+import TcTypeNatsProps
 import TcTypeNats
 
 
