@@ -104,7 +104,7 @@ isEmpty :: Props a -> Bool
 isEmpty (P ps) = M.null ps
 
 -- | Remove propositions that do not satisfy the given predicate.
-filter :: (Ord a, HasProp a) => (a -> Bool) -> Props a -> Props a
+filter :: (Ord a) => (a -> Bool) -> Props a -> Props a
 filter p (P ps) = P (M.mapMaybeWithKey upd ps)
   where upd _ ts = let xs = S.filter p ts
                    in if S.null xs then Nothing else Just xs
