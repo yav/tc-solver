@@ -1,9 +1,9 @@
 module TcTypeNatsFacts where
 
 import TcTypeNatsBase
-import TcTypeNatsEq as Subst
-import TcTypeNatsLeq
-import TcTypeNatsProps as Props
+import TcTypeNatsEq     as Subst
+import qualified TcTypeNatsLeq as Leq
+import TcTypeNatsProps  as Props
 
 import Text.PrettyPrint
 
@@ -13,20 +13,20 @@ Also, ordering predicates are grouped into a separate structure,
 the order model. -}
 data Facts = Facts { facts    :: Props Fact -- ^ Excluding equality and order
                    , factsEq  :: Subst      -- ^ Normalized equalities
-                   , factsLeq :: LeqFacts   -- ^ Normalized order
+                   , factsLeq :: Leq.Facts  -- ^ Normalized order
                    }
 
 -- | Convert a collection of facts to a list.
 factsToList :: Facts -> [Fact]
 factsToList fs = Subst.toFacts (factsEq fs) ++
-                 leqFactsToList (factsLeq fs) ++
+                 Leq.toList (factsLeq fs) ++
                  Props.toList (facts fs)
 
 -- | An empty collection of facts.
 noFacts :: Facts
 noFacts = Facts { facts    = Props.empty
                 , factsEq  = Subst.identity
-                , factsLeq = noLeqFacts
+                , factsLeq = Leq.empty
                 }
 
 instance PP Facts where

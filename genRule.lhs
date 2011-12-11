@@ -1279,7 +1279,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >   $$ text "module TcTypeNatsRules where"
 >   $$ vcat [ text "import" <+> text m | m <- [ "TcTypeNatsBase"
 >                                             , "TcTypeNatsFacts"
->                                             , "TcTypeNatsLeq"
+>                                             , "qualified TcTypeNatsLeq as Leq"
 >                                             , "TcTypeNatsProps"
 >                                             , "TcTypeNatsEval"
 >                                             , "Control.Monad(mzero)"
@@ -1407,7 +1407,7 @@ Generate code, checking if a rule should fire
 >        , let name   = text "leqp" <> int proofId
 >              model  = parens (text "factsLeq" <+> fruleAsmpsName)
 >              expr   = text "Just" <+> name <+> text "<-" <+>
->                       text "leqProve" <+> model <+> toExpr t1 <+> toExpr t2
+>                       text "Leq.prove" <+> model <+> toExpr t1 <+> toExpr t2
 >              entry  = (proofId, name)
 >      ]
 >

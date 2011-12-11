@@ -14,13 +14,13 @@ module TcTypeNats
   , Inerts(..)
   ) where
 
-import TcTypeNatsBase
-import TcTypeNatsProps as Props
-import TcTypeNatsEq as Subst
-import TcTypeNatsLeq
-import TcTypeNatsFacts
-import TcTypeNatsRules
-import TcTypeNatsEval
+import           TcTypeNatsBase
+import           TcTypeNatsProps  as Props
+import           TcTypeNatsEq     as Subst
+import qualified TcTypeNatsLeq    as Leq
+import           TcTypeNatsFacts
+import           TcTypeNatsRules
+import           TcTypeNatsEval
 
 import Debug.Trace
 import Text.PrettyPrint
@@ -208,7 +208,7 @@ eqAddFact eq t1 t2 fs =
     (Var x, Num {})   -> eqBindVar eq x t2 fs
 
     (Var x, _)
-      | not (leqContains (factsLeq fs) t1) -> eqBindVar eq x t2 fs
+      | not (Leq.contains (factsLeq fs) t1) -> eqBindVar eq x t2 fs
 
     (_, Var y)        -> eqBindVar (bySym t1 t2 eq) y t1 fs
 
@@ -224,36 +224,20 @@ eqBindVar eq x t fs = Added (Props.fromList (leqRestart ++ changed))
   {-No need for an "occurs" check because the terms are simple (no recursion)-}
   su                     = Subst.singleton eq x t
 
-  (leqRestart, leqModel) = case leqExtract (Var x) (factsLeq fs) of
+  (leqRestart, leqModel) = case Leq.extract (Var x) (factsLeq fs) of
                              Nothing      -> ([], factsLeq fs)
                              Just (lfs,m) -> (map (impFact su) lfs, m)
 
   (changed, others)      = Props.mapExtract (impFactMb su) (facts fs)
 
 leqAddFact :: Proof -> Term -> Term -> Facts -> AddFact
-leqAddFact proof t1 t2 fs =
-  let m0        = factsLeq fs
-      (n1,m1)   = leqInsNode t1 m0
-      (n2,m2)   = leqInsNode t2 m1
-
-  in case leqReachable m2 t2 t1 of
-
-       Nothing ->
-
-         case leqReachable m2 t1 t2 of
-           Nothing -> let (_,_,m3) = leqLink proof (t1,n1) (t2,n2) m2
-                      in Added (facts fs)
-                               fs { factsLeq = m3, facts = Props.empty }
-           Just _  -> AlreadyKnown
-
-       {- We know the opposite: we don't add the fact
-          but propose an equality instead. -}
-       Just pOp -> Improved $
-         Fact { factProof = byLeqAsym t1 t2 proof pOp
-              , factProp  = Prop Eq [t1,t2]
-              }
-
-
+leqAddFact ev t1 t2 fs =
+  case Leq.addFact ev t1 t2 (factsLeq fs) of
+    Leq.AlreadyKnown -> AlreadyKnown
+    Leq.Improved f   -> Improved f
+    Leq.Added ls     -> Added (facts fs) fs { factsLeq = ls
+                                            , facts = Props.empty
+                                            }
 
 {-------------------------------------------------------------------------------
 Using Existing Goals
@@ -490,7 +474,7 @@ entailsSimple ps p =
                         return (YesIf [p1] proof)
 
                    , do proof <- case goalProp p of
-                                   Prop Leq [s,t] -> leqProve (factsLeq ps) s t
+                                   Prop Leq [s,t] -> Leq.prove (factsLeq ps) s t
                                    g -> solve (facts ps) g
                         return (YesIf [] proof)
                    ]

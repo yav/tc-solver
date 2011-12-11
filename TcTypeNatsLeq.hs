@@ -1,93 +1,102 @@
-{-
-Reasoning About Order
-
-To reason about order, we store the information about related terms
+{- | To reason about order, we store the information about related terms
 as a graph: the nodes are terms, and the edges are labelled with proofs,
 providing evidence of the relation between the terms.
 -}
-module TcTypeNatsLeq where
+module TcTypeNatsLeq
+  ( Facts
+  , prove
+  , empty
+  , addFact
+  , AddFact(..)
+  , toList
+  , contains
+  , extract
+  ) where
 
 import TcTypeNatsBase
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Text.PrettyPrint
+import Text.PrettyPrint(vcat)
 import Control.Monad(guard)
 
-newtype LeqFacts = LM (M.Map Term LeqEdges)
+-- | A collection of facts about the ordering of terms.
+newtype Facts = LM (M.Map Term Edges)
 
-data LeqEdge = LeqEdge { leProof :: Proof, leTarget :: Term }
+data Edge     = Edge { proof :: Proof, target :: Term }
 
-data LeqEdges = LeqEdges { lnAbove :: S.Set LeqEdge -- proof: here   <= above
-                         , lnBelow :: S.Set LeqEdge -- proof: bellow <= here
-                         }
+data Edges    = Edges { above :: S.Set Edge -- proof: here   <= above
+                      , below :: S.Set Edge -- proof: bellow <= here
+                      }
 
+instance Eq Edge where
+  x == y  = target x == target y
 
+instance Ord Edge where
+  compare x y = compare (target x) (target y)
 
-instance Eq LeqEdge where
-  x == y  = leTarget x == leTarget y
-
-instance Ord LeqEdge where
-  compare x y = compare (leTarget x) (leTarget y)
-
-leqNodeFacts :: Term -> LeqEdges -> [Fact]
-leqNodeFacts x es = toFacts lnBelow lowerFact ++ toFacts lnAbove upperFact
+-- | Convert the graph representation (a node and its edges) to facts.
+nodeFacts :: Term -> Edges -> [Fact]
+nodeFacts x es = toFacts below lowerFact ++ toFacts above upperFact
   where
   toFacts list f = map f $ S.toList $ list es
 
-  upperFact f    = Fact { factProp  = Prop Leq [x, leTarget f]
-                        , factProof = leProof f
+  upperFact f    = Fact { factProp  = Prop Leq [x, target f]
+                        , factProof = proof f
                         }
 
-  lowerFact f    = Fact { factProp  = Prop Leq [leTarget f, x]
-                        , factProof = leProof f
+  lowerFact f    = Fact { factProp  = Prop Leq [target f, x]
+                        , factProof = proof f
                         }
 
-noLeqEdges :: LeqEdges
-noLeqEdges = LeqEdges { lnAbove = S.empty, lnBelow = S.empty }
+noEdges :: Edges
+noEdges = Edges { above = S.empty, below = S.empty }
 
+-- | An empty collection of facts about equality.
+empty :: Facts
+empty = LM M.empty
 
-noLeqFacts :: LeqFacts
-noLeqFacts = LM M.empty
-
-leqFactsToList :: LeqFacts -> [Fact]
-leqFactsToList (LM m) =
+-- | The list of ordering facts stored in the collection.
+toList :: Facts -> [Fact]
+toList (LM m) =
   do (from,edges) <- M.toList m
-     edge         <- S.toList (lnAbove edges)
-     let to = leTarget edge
+     edge         <- S.toList (above edges)
+     let to = target edge
      guard (not (triv from to))
-     return Fact { factProof = leProof edge, factProp = Prop Leq [ from, to ] }
+     return Fact { factProof = proof edge, factProp = Prop Leq [ from, to ] }
 
   where triv (Num {}) (Num {}) = True
         triv (Num 0 _) _       = True
         triv _       _         = False
 
 
+-- | The edges immediately above a node.
+immAbove :: Facts -> Term -> S.Set Edge
+immAbove (LM m) t = case M.lookup t m of
+                      Just edges -> above edges
+                      Nothing    -> S.empty
 
-leqImmAbove :: LeqFacts -> Term -> S.Set LeqEdge
-leqImmAbove (LM m) t = case M.lookup t m of
-                         Just edges -> lnAbove edges
-                         Nothing    -> S.empty
 
-
-leqReachable :: LeqFacts -> Term -> Term -> Maybe Proof
-leqReachable m smaller larger =
-  search S.empty (S.singleton LeqEdge { leProof  = byLeqRefl smaller
-                                      , leTarget = smaller })
+-- | Check if there is an upward path from from the first node to the second.
+-- The resulting proof object records the path.
+reachable :: Facts -> Term -> Term -> Maybe Proof
+reachable m smaller larger =
+  search S.empty (S.singleton Edge { proof  = byLeqRefl smaller
+                                   , target = smaller })
   where
   search visited todo =
-    do (LeqEdge { leProof = proof, leTarget = term }, rest) <- S.minView todo
+    do (Edge { proof = pr, target = term }, rest) <- S.minView todo
        if term == larger
-          then return proof
-          else let updProof e = e { leProof = byLeqTrans
-                                                smaller
-                                                term
-                                                (leTarget e)
-                                                proof
-                                                (leProof e) }
+          then return pr
+          else let updProof e = e { proof = byLeqTrans
+                                              smaller
+                                              term
+                                              (target e)
+                                              pr
+                                              (proof e) }
 
-                   new     = S.mapMonotonic updProof (leqImmAbove m term)
+                   new     = S.mapMonotonic updProof (immAbove m term)
                    vis     = S.insert term visited
-                   notDone = S.filter (not . (`S.member` vis) . leTarget)
+                   notDone = S.filter (not . (`S.member` vis) . target)
           in search vis (notDone new `S.union` notDone rest)
 
 
@@ -113,33 +122,32 @@ edge from L to U.  The final result is illustrated on the right.
 
 L: lower
 U: upper
-a: a member of "lnAbove uedges"  (uus)
-d: a member of "lnBelow ledges"  (lls)
+a: a member of "above uedges"  (uus)
+d: a member of "below ledges"  (lls)
 -}
 
 
 
-leqLink :: Proof -> (Term,LeqEdges) -> (Term,LeqEdges) -> LeqFacts ->
-                                                  (LeqEdges,LeqEdges,LeqFacts)
+link :: Proof -> (Term,Edges) -> (Term,Edges) -> Facts -> (Edges,Edges,Facts)
 
-leqLink proof (lower, ledges) (upper, uedges) (LM m) =
+link ev (lower, ledges) (upper, uedges) (LM m) =
 
-  let uus         = S.mapMonotonic leTarget (lnAbove uedges)
-      lls         = S.mapMonotonic leTarget (lnBelow ledges)
+  let uus         = S.mapMonotonic target (above uedges)
+      lls         = S.mapMonotonic target (below ledges)
 
-      newLedges   = ledges { lnAbove =
-                               S.insert (LeqEdge { leProof  = proof
-                                                 , leTarget = upper
-                                                 })
-                               $ S.filter (not . (`S.member` uus) . leTarget)
-                               $ lnAbove ledges
+      newLedges   = ledges { above =
+                               S.insert (Edge { proof  = ev
+                                              , target = upper
+                                              })
+                               $ S.filter (not . (`S.member` uus) . target)
+                               $ above ledges
                            }
-      newUedges   = uedges { lnBelow =
-                               S.insert (LeqEdge { leProof  = proof
-                                                 , leTarget = lower
-                                                 })
-                               $ S.filter (not . (`S.member` lls) . leTarget)
-                               $ lnBelow uedges
+      newUedges   = uedges { below =
+                               S.insert (Edge { proof  = ev
+                                              , target = lower
+                                              })
+                               $ S.filter (not . (`S.member` lls) . target)
+                               $ below uedges
                            }
 
 {- The "undefined" in 'del' is OK because the proofs are not used in the
@@ -148,11 +156,11 @@ Note that filter-ing is a little different because it has to traverse the
 whole set while here we stop as soon as we found the element that is
 to be removed. -}
 
-      del x       = S.delete LeqEdge { leTarget = x, leProof = undefined }
+      del x       = S.delete Edge { target = x, proof = undefined }
 
 
-      adjAbove    = M.adjust (\e -> e { lnAbove = del upper (lnAbove e) })
-      adjBelow    = M.adjust (\e -> e { lnBelow = del lower (lnBelow e) })
+      adjAbove    = M.adjust (\e -> e { above = del upper (above e) })
+      adjBelow    = M.adjust (\e -> e { below = del lower (below e) })
       fold f xs x = S.fold f x xs
 
   in ( newLedges
@@ -164,19 +172,23 @@ to be removed. -}
             m
      )
 
-leqInsNode :: Term -> LeqFacts -> (LeqEdges, LeqFacts)
-leqInsNode t model@(LM m0) =
+-- | Insert a new node in a collection of facts.
+-- Returns the edges surrounding the new node.
+--  * Variable nodes are always linked to 0 (directly or indirectly).
+--  * Constant nodes are always linked to neighbouring constant nodes.
+insNode :: Term -> Facts -> (Edges, Facts)
+insNode t model@(LM m0) =
   case M.splitLookup t m0 of
     (_, Just r, _)  -> (r, model)
     (left, Nothing, right) ->
-      let new           = noLeqEdges
+      let new           = noEdges
           ans1@(es1,m1) = ( new, LM (M.insert t new m0) )
       in case t of
            Var _ ->
              -- link to 0
              let zero         = num 0
-                 (zes,zm)     = leqInsNode zero m1    -- Should not modify es1
-                 (_, es2, m2) = leqLink (byLeq0 t) (zero,zes) (t,es1) zm
+                 (zes,zm)     = insNode zero m1    -- Should not modify es1
+                 (_, es2, m2) = link (byLeq0 t) (zero,zes) (t,es1) zm
              in (es2, m2)
            Num m _ ->
              -- link to a smaller constnat, if any
@@ -184,13 +196,13 @@ leqInsNode t model@(LM m0) =
                    case toNum M.findMax left of
                      Nothing -> ans1
                      Just (n,l)  ->
-                       let (_,x,y) = leqLink (byLeqDef n m) l (t,es1) m1
+                       let (_,x,y) = link (byLeqDef n m) l (t,es1) m1
                        in (x,y)
              -- link to a larger constant, if any
              in case toNum M.findMin right of
                   Nothing -> ans2
                   Just (n,u)  ->
-                    let (x,_,y) = leqLink (byLeqDef m n) (t,es2) u m2
+                    let (x,_,y) = link (byLeqDef m n) (t,es2) u m2
                     in (x,y)
 
   where
@@ -200,50 +212,72 @@ leqInsNode t model@(LM m0) =
                    Num n _ -> return (n,r)
                    _       -> Nothing
 
-
-{-
-leqFactsAffectedBy :: LeqFacts -> Subst -> Bool
-leqFactsAffectedBy (LM m) = any affects . substDom
-  where affects x = case M.lookup (Var x) (fst (M.split (num 0) m)) of
-                      Nothing -> False
-                      _       -> True
--}
-
-leqProve :: LeqFacts -> Term -> Term -> Maybe Proof
-leqProve model s t =
-  let (_,m1) = leqInsNode s model
-      (_,m2) = leqInsNode t m1
-  in leqReachable m2 s t
+-- | Try to find a proof that the first term is smaller then the second.
+prove :: Facts -> Term -> Term -> Maybe Proof
+prove model s t =
+  let (_,m1) = insNode s model
+      (_,m2) = insNode t m1
+  in reachable m2 s t
 
 
-{- Remove the term from the model, and return the facts immediately
-associated with ot.
+{-| Remove the term from the model and return the facts immediately
+associated with it.
 
 This is useful when we want to improve a term: we remove it from the model,
 improve the associated facts, and then add them back.
 -}
-leqExtract :: Term -> LeqFacts -> Maybe ([Fact], LeqFacts)
-leqExtract term (LM m) =
+extract :: Term -> Facts -> Maybe ([Fact], Facts)
+extract term (LM m) =
   case M.updateLookupWithKey (\_ _ -> Nothing) term m of
     (Nothing, _)  -> Nothing
     (Just es, m1) -> Just
-      ( leqNodeFacts term es
-      , LM $ fold adjAbove (nodes lnBelow es)
-           $ fold adjBelow (nodes lnAbove es) m1
+      ( nodeFacts term es
+      , LM $ fold adjAbove (nodes below es)
+           $ fold adjBelow (nodes above es) m1
       )
   where
-  del         = S.delete LeqEdge { leTarget = term, leProof = undefined }
-  adjAbove    = M.adjust (\e -> e { lnAbove = del (lnAbove e) })
-  adjBelow    = M.adjust (\e -> e { lnBelow = del (lnBelow e) })
-  nodes f es  = S.mapMonotonic leTarget (f es)
+  del         = S.delete Edge { target = term, proof = undefined }
+  adjAbove    = M.adjust (\e -> e { above = del (above e) })
+  adjBelow    = M.adjust (\e -> e { below = del (below e) })
+  nodes f es  = S.mapMonotonic target (f es)
   fold f xs x = S.fold f x xs
 
-leqContains :: LeqFacts -> Term -> Bool
-leqContains (LM m) t = case M.lookup t m of
-                         Nothing -> False
-                         Just _  -> True
+-- | Check if the collection of facts mentions the given term.
+contains :: Facts -> Term -> Bool
+contains (LM m) t = case M.lookup t m of
+                      Nothing -> False
+                      Just _  -> True
 
-instance PP LeqFacts where
-  pp = vcat . map pp . leqFactsToList
+instance PP Facts where
+  pp = vcat . map pp . toList
+
+-- | The result of trying to extend a collection of facts with a new one.
+data AddFact = Added Facts    -- ^ The fact was added succesfully.
+             | AlreadyKnown   -- ^ The fact was not added because it was known.
+             | Improved Fact  -- ^ The fact was not added because there is
+                              -- an equiavlent more useful fact.
+
+-- | Try to add the fact that the first term is smaller then the second
+-- (as evidenced by the proof).
+addFact :: Proof -> Term -> Term -> Facts -> AddFact
+addFact ev t1 t2 m0 =
+  let (n1,m1)   = insNode t1 m0
+      (n2,m2)   = insNode t2 m1
+
+  in case reachable m2 t2 t1 of
+
+       Nothing ->
+
+         case reachable m2 t1 t2 of
+           Nothing -> let (_,_,m3) = link ev (t1,n1) (t2,n2) m2
+                      in Added m3
+           Just _  -> AlreadyKnown
+
+       {- We know the opposite: we don't add the fact
+          but propose an equality instead. -}
+       Just pOp -> Improved $
+         Fact { factProof = byLeqAsym t1 t2 ev pOp
+              , factProp  = Prop Eq [t1,t2]
+              }
 
 
