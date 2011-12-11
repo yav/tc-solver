@@ -1366,7 +1366,7 @@ This is the first phase in checking if a rule fires.
 >   | otherwise         = tuplePat (map (asmpName op) [ 1 .. howMany ])
 >                       <+> text "<-"
 >                       <+> fun <+> text (opCon op) <+>
->                           parens (text "facts" <+> fruleAsmpsName)
+>                           parens (text "getOtherFacts" <+> fruleAsmpsName)
 >
 >     where fun = text "getPropsFor" <> (if howMany == 1 then empty
 >                                                        else int howMany)
@@ -1405,7 +1405,7 @@ Generate code, checking if a rule should fire
 >      [ (entry, expr)
 >        | (proofId, [t1,t2]) <- M.findWithDefault [] Leq (fPats rule)
 >        , let name   = text "leqp" <> int proofId
->              model  = parens (text "factsLeq" <+> fruleAsmpsName)
+>              model  = parens (text "getLeqFacts" <+> fruleAsmpsName)
 >              expr   = text "Just" <+> name <+> text "<-" <+>
 >                       text "Leq.prove" <+> model <+> toExpr t1 <+> toExpr t2
 >              entry  = (proofId, name)

@@ -17,7 +17,7 @@ import Text.PrettyPrint hiding (char)
 
 
 import TcTypeNatsBase
-import TcTypeNatsFacts
+import TcTypeNatsFacts as Facts
 import TcTypeNatsProps as Props
 import TcTypeNats
 import TcTypeNatsStandAlone
@@ -200,7 +200,7 @@ renderIS Nothing = list [ list [ str "Wanted", str "(inconsistent)" ]
                         , list [ str "Given",  str "(inconsistent)" ]
                         ]
 renderIS (Just ss) =
-  list ( [ renderWI (Given g)  | g <- factsToList (given xs)  ] ++
+  list ( [ renderWI (Given g)  | g <- Facts.toList (given xs)  ] ++
          [ renderWI (Wanted w) | w <- Props.toList (wanted xs) ] ++
          [ list [ show "Proof", show $ ppp p ] | p <- ps ]
        )

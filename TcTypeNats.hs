@@ -18,7 +18,7 @@ import           TcTypeNatsBase
 import           TcTypeNatsProps  as Props
 import           TcTypeNatsEq     as Subst
 import qualified TcTypeNatsLeq    as Leq
-import           TcTypeNatsFacts
+import           TcTypeNatsFacts  as Facts
 import           TcTypeNatsRules
 import           TcTypeNatsEval
 
@@ -44,7 +44,7 @@ the propositions in it cannot ``interact'' with each other. -}
 data Inerts = Inerts { given :: Facts, wanted :: Props Goal }
 
 noInerts :: Inerts
-noInerts = Inerts { given = noFacts, wanted = Props.empty }
+noInerts = Inerts { given = Facts.empty, wanted = Props.empty }
 
 instance PP Inerts where
   pp is = pp (given is) $$ pp (wanted is)
@@ -133,7 +133,7 @@ noChanges is = PassResult { solvedWanted = []
                           }
 
 
---------------------------------------------------------------------------------
+-- Facts -----------------------------------------------------------------------
 
 
 {-| Adding a new assumptions to an inert set.
@@ -169,27 +169,22 @@ facts by removing them from the set and adding improved version as
 new work.
 -}
 
-data AddFact = Inconsistent
-             | AlreadyKnown
-             | Improved Fact
-             | Added (Props Fact) Facts     -- additional facts, new set
-
 addFact :: Fact -> Facts -> AddFact
 addFact f fs =
-  case impFactMb (factsEq fs) f of
+  case improveFact (getEqFacts fs) f of
     Just f1 -> Improved f1
     Nothing ->
       case factProp f of
-        Prop Eq  [s,t] -> eqAddFact  (factProof f) s t fs
-        Prop Leq [s,t] -> leqAddFact (factProof f) s t fs
+        Prop Eq  [s,t] -> addEqFact  (factProof f) s t fs
+        Prop Leq [s,t] -> addLeqFact (factProof f) s t fs
         _ | impossible (factProp f) -> Inconsistent
         _ ->
-          case solve (facts fs) (factProp f) of
+          case solve (getOtherFacts fs) (factProp f) of
             Just _ -> AlreadyKnown
 
             -- XXX: Modify "implied" to generate Props directly.
             _      -> Added (Props.fromList (implied fs f))
-                            fs { facts = Props.insert f (facts fs) }
+                            (addOtherInertFact f fs)
   where
   -- XXX: It would be nicer to make this less ad-hoc.
   impossible (Prop Mul [Num x _, _, Num y _]) = isNothing (divide y x)
@@ -197,47 +192,6 @@ addFact f fs =
   impossible (Prop Exp [_, Num x _, Num y _]) = isNothing (descreteRoot y x)
   impossible _ = False
 
-
-eqAddFact :: Proof -> Term -> Term -> Facts -> AddFact
-eqAddFact eq t1 t2 fs =
-  case (t1, t2) of
-    _ | t1 == t2      -> AlreadyKnown
-
-    (Num {}, Num {})  -> Inconsistent
-
-    (Var x, Num {})   -> eqBindVar eq x t2 fs
-
-    (Var x, _)
-      | not (Leq.contains (factsLeq fs) t1) -> eqBindVar eq x t2 fs
-
-    (_, Var y)        -> eqBindVar (bySym t1 t2 eq) y t1 fs
-
-
-eqBindVar :: Proof -> Var -> Term -> Facts -> AddFact
-eqBindVar eq x t fs = Added (Props.fromList (leqRestart ++ changed))
-                            Facts { factsEq   = compose su (factsEq fs)
-                                  , factsLeq  = leqModel
-                                  , facts     = others
-                                  }
-
-  where
-  {-No need for an "occurs" check because the terms are simple (no recursion)-}
-  su                     = Subst.singleton eq x t
-
-  (leqRestart, leqModel) = case Leq.extract (Var x) (factsLeq fs) of
-                             Nothing      -> ([], factsLeq fs)
-                             Just (lfs,m) -> (map (impFact su) lfs, m)
-
-  (changed, others)      = Props.mapExtract (impFactMb su) (facts fs)
-
-leqAddFact :: Proof -> Term -> Term -> Facts -> AddFact
-leqAddFact ev t1 t2 fs =
-  case Leq.addFact ev t1 t2 (factsLeq fs) of
-    Leq.AlreadyKnown -> AlreadyKnown
-    Leq.Improved f   -> Improved f
-    Leq.Added ls     -> Added (facts fs) fs { factsLeq = ls
-                                            , facts = Props.empty
-                                            }
 
 {-------------------------------------------------------------------------------
 Using Existing Goals
@@ -468,14 +422,14 @@ if a set of assumptions (the first argument), entail a certain proposition
 
 entailsSimple :: Facts -> Goal -> TCN Answer
 entailsSimple ps p =
-  do improved <- impGoal (factsEq ps) p
+  do improved <- impGoal (getEqFacts ps) p
      return $ fromMaybe NotForAll
             $ msum [ do (p1,proof) <- improved
                         return (YesIf [p1] proof)
 
                    , do proof <- case goalProp p of
-                                   Prop Leq [s,t] -> Leq.prove (factsLeq ps) s t
-                                   g -> solve (facts ps) g
+                                   Prop Leq [s,t] -> Leq.prove (getLeqFacts ps) s t
+                                   g -> solve (getOtherFacts ps) g
                         return (YesIf [] proof)
                    ]
 
@@ -483,7 +437,7 @@ entails :: Facts -> Goal -> TCN Answer
 
 -- For debugging.
 entails ps p | gTrace msg = undefined
-  where msg = text "Entails?" $$ nest 2 (vcat (map pp (Props.toList (facts ps)))
+  where msg = text "Entails?" $$ nest 2 (vcat (map pp (Facts.toList ps))
                                       $$ text "-----------------"
                                       $$ pp p
                                         )
@@ -499,8 +453,9 @@ entails ps p =
            Nothing -> return NotForAny
 
            {- New facts!  We consider only the equalities. -}
-           Just (Facts { factsEq = su1 }) ->
-             do eqns <- mapM newGoal $ map factProp $ Subst.toFacts su1
+           Just new ->
+             do let su1 = getEqFacts new
+                eqns <- mapM newGoal $ map factProp $ Subst.toFacts su1
                 case assumeGoals eqns ps of
                   Nothing  -> return NotForAny
                   Just ps1 ->
@@ -560,27 +515,6 @@ impGoal su p
                                        (ts ++ propArgs p)
                                        (zipWith3 bySym (propArgs p) ts evs)
                                        (ByAsmp (goalName g)))
-  where (evs,ts) = unzip $ map (Subst.apply su) (propArgs p)
-
--- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
-impFact :: Subst -> Fact -> Fact
-impFact su p = fst (impFactChange su p)
-
-impFactMb :: Subst -> Fact -> Maybe Fact
-impFactMb su p = case impFactChange su p of
-                   (_,False)  -> Nothing
-                   (fact1,_)  -> Just fact1
-
--- If "A : P x", and "B : x = 3", then "ByCong P [B] A : P 3"
-impFactChange :: Subst -> Fact -> (Fact, Bool)
-impFactChange su p = ( p { factProof = byCong (propPred p) (propArgs p ++ ts)
-                                                           evs (factProof p)
-                         , factProp  = Prop (propPred p) ts
-                         }
-
-                     -- Indicates if something changed.
-                     , not (all isRefl evs)
-                     )
   where (evs,ts) = unzip $ map (Subst.apply su) (propArgs p)
 
 
