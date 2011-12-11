@@ -1,4 +1,18 @@
-module TcTypeNats where
+{- |
+The purpose of the solver is to turn an arbitrary set of propositions
+into an inert one.  This is done by starting with some inert set
+(e.g., the empty set of propositions) and then adding each new proposition
+one at a time.  Assumptions and goals are added in different ways, so
+we have two different functions to add a proposition to an existing
+inert set.
+-}
+
+module TcTypeNats
+  ( SolverS(..)
+  , initSolverS
+  , addWorkItemsM
+  , Inerts(..)
+  ) where
 
 import TcTypeNatsBase
 import TcTypeNatsProps as Props
@@ -12,7 +26,136 @@ import Debug.Trace
 import Text.PrettyPrint
 import Data.Maybe(fromMaybe,isNothing)
 import Data.List(find)
-import Control.Monad(MonadPlus(..),guard,msum,foldM)
+import Control.Monad(MonadPlus(..),msum,foldM)
+
+data SolverS = SolverS
+  { ssTodoFacts :: Props Fact
+  , ssTodoGoals :: [Goal]
+  , ssSolved    :: [(EvVar,Proof)]
+  , ssInerts    :: Inerts
+  }
+
+
+{-|
+The inert set is a collection of propositions, which keeps track
+of the facts that are known by the solver, as well as any goals that
+were attempted but not solved.  We refer to this set as ``inert'' because
+the propositions in it cannot ``interact'' with each other. -}
+data Inerts = Inerts { given :: Facts, wanted :: Props Goal }
+
+noInerts :: Inerts
+noInerts = Inerts { given = noFacts, wanted = Props.empty }
+
+instance PP Inerts where
+  pp is = pp (given is) $$ pp (wanted is)
+
+
+
+initSolverS :: SolverS
+initSolverS = SolverS
+  { ssTodoGoals = []
+  , ssTodoFacts = Props.empty
+  , ssSolved    = []
+  , ssInerts    = noInerts
+  }
+
+
+-- | The final state should have empty 'todo*' queues.
+addWorkItemsM :: SolverS -> TCN SolverS
+
+addWorkItemsM ss0 =
+  case getFact ss0 of
+    Just (fact, ss1) ->
+      do r <- addGiven fact (ssInerts ss1)
+         addWorkItemsM (nextState r ss1)
+
+    Nothing ->
+      case getGoal ss0 of
+       Just (goal, ss1) ->
+         do r <- addWanted goal (ssInerts ss1)
+            addWorkItemsM (nextState r ss1)
+
+       Nothing -> return ss0
+
+
+
+
+{- | When processing facts, it is more
+efficient if we first process equalities, then order and, finally, all other
+facts.  To make this easy, we store unprocessed facts as 'Prpos' instead
+of just using a list.
+
+We add equalities first because they might lead to improvements that,
+in turn, would enable the discovery of additional facts.  In particular, if a
+presently known fact gets improved, then the old fact is removed from the
+list of known facts, and its improved version is added as new work.  Thus,
+if we process equalities first, we don't need to do any of this "restarting".
+
+For similar reasons we process ordering predicates before others: they
+make it possible for certain conditional rules to fire.  For example,
+the cancellation rule for multiplication requires that the argument that
+is being cancelled is greater than 0.
+-}
+
+getFact :: SolverS -> Maybe (Fact, SolverS)
+getFact s = case getOne (ssTodoFacts s) of
+              Nothing     -> Nothing
+              Just (f,fs) -> Just (f, s { ssTodoFacts = fs })
+
+getGoal :: SolverS -> Maybe (Goal, SolverS)
+getGoal s = case ssTodoGoals s of
+              []     -> Nothing
+              g : gs -> Just (g, s { ssTodoGoals = gs })
+
+nextState :: PassResult -> SolverS -> SolverS
+nextState r s =
+  SolverS { ssTodoFacts = Props.union (newFacts r) (ssTodoFacts s)
+          , ssTodoGoals = newGoals r ++ ssTodoGoals s
+          , ssInerts    = newInerts r
+          , ssSolved    = solvedWanted r ++ ssSolved s
+          }
+
+--------------------------------------------------------------------------------
+
+
+
+data PassResult = PassResult { solvedWanted :: [(EvVar,Proof)]
+                             , newGoals     :: [Goal]
+                             , newFacts     :: Props Fact
+                             , newInerts    :: Inerts
+                             }
+
+noChanges :: Inerts -> PassResult
+noChanges is = PassResult { solvedWanted = []
+                          , newGoals     = []
+                          , newFacts     = Props.empty
+                          , newInerts    = is
+                          }
+
+
+--------------------------------------------------------------------------------
+
+
+{-| Adding a new assumptions to an inert set.
+If the assumptions was added to the set, then we remove any existing goals
+and add them as new work, in case they can be solved in terms of the
+new fact. -}
+addGiven  :: Fact -> Inerts -> TCN PassResult
+addGiven g props =
+  case addFact g (given props) of
+    Inconsistent  -> mzero
+    AlreadyKnown  -> return (noChanges props)
+    Improved fact -> return (noChanges props)
+                            { newFacts = Props.singleton fact }
+    Added new newProps -> return
+      PassResult { newGoals      = Props.toList (wanted props)
+                 , newFacts      = new
+                 , solvedWanted  = []
+                 , newInerts     = Inerts { given  = newProps
+                                          , wanted = Props.empty
+                                          }
+                 }
+
 
 
 {- 'addFact' attempts to extend a collection of already known facts.
@@ -53,6 +196,64 @@ addFact f fs =
   impossible (Prop Exp [Num x _, _, Num y _]) = isNothing (descreteLog y x)
   impossible (Prop Exp [_, Num x _, Num y _]) = isNothing (descreteRoot y x)
   impossible _ = False
+
+
+eqAddFact :: Proof -> Term -> Term -> Facts -> AddFact
+eqAddFact eq t1 t2 fs =
+  case (t1, t2) of
+    _ | t1 == t2      -> AlreadyKnown
+
+    (Num {}, Num {})  -> Inconsistent
+
+    (Var x, Num {})   -> eqBindVar eq x t2 fs
+
+    (Var x, _)
+      | not (leqContains (factsLeq fs) t1) -> eqBindVar eq x t2 fs
+
+    (_, Var y)        -> eqBindVar (bySym t1 t2 eq) y t1 fs
+
+
+eqBindVar :: Proof -> Var -> Term -> Facts -> AddFact
+eqBindVar eq x t fs = Added (Props.fromList (leqRestart ++ changed))
+                            Facts { factsEq   = compose su (factsEq fs)
+                                  , factsLeq  = leqModel
+                                  , facts     = others
+                                  }
+
+  where
+  {-No need for an "occurs" check because the terms are simple (no recursion)-}
+  su                     = Subst.singleton eq x t
+
+  (leqRestart, leqModel) = case leqExtract (Var x) (factsLeq fs) of
+                             Nothing      -> ([], factsLeq fs)
+                             Just (lfs,m) -> (map (impFact su) lfs, m)
+
+  (changed, others)      = Props.mapExtract (impFactMb su) (facts fs)
+
+leqAddFact :: Proof -> Term -> Term -> Facts -> AddFact
+leqAddFact proof t1 t2 fs =
+  let m0        = factsLeq fs
+      (n1,m1)   = leqInsNode t1 m0
+      (n2,m2)   = leqInsNode t2 m1
+
+  in case leqReachable m2 t2 t1 of
+
+       Nothing ->
+
+         case leqReachable m2 t1 t2 of
+           Nothing -> let (_,_,m3) = leqLink proof (t1,n1) (t2,n2) m2
+                      in Added (facts fs)
+                               fs { factsLeq = m3, facts = Props.empty }
+           Just _  -> AlreadyKnown
+
+       {- We know the opposite: we don't add the fact
+          but propose an equality instead. -}
+       Just pOp -> Improved $
+         Fact { factProof = byLeqAsym t1 t2 proof pOp
+              , factProp  = Prop Eq [t1,t2]
+              }
+
+
 
 {-------------------------------------------------------------------------------
 Using Existing Goals
@@ -109,20 +310,6 @@ informally corresponding to ``certainly not'', ''not in its current form'',
 and ''(a qualified) yes''. -}
 data Answer = NotForAny | NotForAll | YesIf [Goal] Proof
 
-isNotForAny :: Answer -> Bool
-isNotForAny NotForAny = True
-isNotForAny _         = False
-
-isNotForAll :: Answer -> Bool
-isNotForAll NotForAll = True
-isNotForAll _         = False
-
-isYesIf :: Answer -> Bool
-isYesIf (YesIf _ _)   = True
-isYesIf _             = False
-
-
-
 
 {- More precisely, \Verb"NotForAny" asserts that the proposition in question
 contradicts the given set of assumptions, no matter how we instantiate its
@@ -172,53 +359,6 @@ equivalent to the original goal (under the given assumptions) but also
 ``simpler'', a concept that we shall discuss further in
 Section~\ref{sec_improvement}.  -}
 
-
-{-------------------------------------------------------------------------------
-The Inert Props
-
-The {\em inert set} is a collection of propositions, which keeps track
-of the facts that are known by the solver, as well as any goals that
-were attempted but not solved.  We refer to this set as ``inert'' because
-the propositions in it cannot ``interact'' with each other.
--------------------------------------------------------------------------------}
-
-data Inerts = Inerts { given :: Facts, wanted :: Props Goal }
-
-noInerts :: Inerts
-noInerts = Inerts { given = noFacts, wanted = Props.empty }
-
-
-data PassResult = PassResult { solvedWanted :: [(EvVar,Proof)]
-                             , newGoals     :: [Goal]
-                             , newFacts     :: Props Fact
-                             , newInerts    :: Inerts
-                             }
-
-noChanges :: Inerts -> PassResult
-noChanges is = PassResult { solvedWanted = []
-                          , newGoals     = []
-                          , newFacts     = Props.empty
-                          , newInerts    = is
-                          }
-
-
-
-{- Adding a new assumptions to an inert set.
-If the assumptions was added to the set, then we remove any existing goals
-and add them as new work, in case they can be solved in terms of the
-new fact. -}
-addGiven  :: Fact -> Inerts -> TCN PassResult
-addGiven g props =
-  case addFact g (given props) of
-    Inconsistent  -> mzero
-    AlreadyKnown  -> return (noChanges props)
-    Improved fact -> return (noChanges props) { newFacts = Props.singleton fact }
-    Added new newProps -> return
-      PassResult { newGoals      = Props.toList (wanted props)
-                 , newFacts      = new
-                 , solvedWanted  = []
-                 , newInerts     = Inerts { given = newProps, wanted = Props.empty }
-                 }
 
 
 {-------------------------------------------------------------------------------
@@ -420,36 +560,10 @@ substitution.
 
 
 
-
-{- Proprties of the Entailment Function.
-
-The following two functions state some properties of the entailment
-function.  It would be nice to try to prove that they hold.
--}
-
-
--- | Adding more assumptions cannot make things less contradictory
-entails_any_prop :: Facts -> Goal -> Fact -> TCN ()
-entails_any_prop ps q p =
-  do res <- entails ps q
-     case res of
-       NotForAny ->
-         case addFactTrans ps p of
-           Nothing -> return ()
-           Just ps1 -> (guard . isNotForAny) =<< entails ps1 q
-       _         -> return ()
-
-
--- | Dropping assumptions cannot make things more contradictory or more defined.
-enatils_all_prop :: Fact -> Facts -> Goal -> TCN ()
-enatils_all_prop p ps q =
-  case addFactTrans ps p of
-    Just ps1 -> do ans <- entails ps1 q
-                   case ans of
-                     NotForAll -> (guard . isNotForAll) =<< entails ps q
-                     _         -> return ()
-    _ -> return ()
-
+newGoal :: Prop -> TCN Goal
+newGoal p =
+  do x <- newEvVar
+     return Goal { goalName = x, goalProp = p }
 
 {- Given a goal, return a new goal, and a proof which
 solves the old goal in terms of the new one.
@@ -485,62 +599,6 @@ impFactChange su p = ( p { factProof = byCong (propPred p) (propArgs p ++ ts)
                      )
   where (evs,ts) = unzip $ map (Subst.apply su) (propArgs p)
 
-eqAddFact :: Proof -> Term -> Term -> Facts -> AddFact
-eqAddFact eq t1 t2 fs =
-  case (t1, t2) of
-    _ | t1 == t2      -> AlreadyKnown
-
-    (Num {}, Num {})  -> Inconsistent
-
-    (Var x, Num {})   -> eqBindVar eq x t2 fs
-
-    (Var x, _)
-      | not (leqContains (factsLeq fs) t1) -> eqBindVar eq x t2 fs
-
-    (_, Var y)        -> eqBindVar (bySym t1 t2 eq) y t1 fs
-
-
-eqBindVar :: Proof -> Var -> Term -> Facts -> AddFact
-eqBindVar eq x t fs = Added (Props.fromList (leqRestart ++ changed))
-                            Facts { factsEq   = compose su (factsEq fs)
-                                  , factsLeq  = leqModel
-                                  , facts     = others
-                                  }
-
-  where
-  {-No need for an "occurs" check because the terms are simple (no recursion)-}
-  su                     = Subst.singleton eq x t
-
-  (leqRestart, leqModel) = case leqExtract (Var x) (factsLeq fs) of
-                             Nothing      -> ([], factsLeq fs)
-                             Just (lfs,m) -> (map (impFact su) lfs, m)
-
-  (changed, others)      = Props.mapExtract (impFactMb su) (facts fs)
-
-leqAddFact :: Proof -> Term -> Term -> Facts -> AddFact
-leqAddFact proof t1 t2 fs =
-  let m0        = factsLeq fs
-      (n1,m1)   = leqInsNode t1 m0
-      (n2,m2)   = leqInsNode t2 m1
-
-  in case leqReachable m2 t2 t1 of
-
-       Nothing ->
-
-         case leqReachable m2 t1 t2 of
-           Nothing -> let (_,_,m3) = leqLink proof (t1,n1) (t2,n2) m2
-                      in Added (facts fs)
-                               fs { factsLeq = m3, facts = Props.empty }
-           Just _  -> AlreadyKnown
-
-       {- We know the opposite: we don't add the fact
-          but propose an equality instead. -}
-       Just pOp -> Improved $
-         Fact { factProof = byLeqAsym t1 t2 proof pOp
-              , factProp  = Prop Eq [t1,t2]
-              }
-
-
 
 --------------------------------------------------------------------------------
 
@@ -555,132 +613,6 @@ byAsmp ps p =
 
 
 
-{-------------------------------------------------------------------------------
-Testing without GHC
--------------------------------------------------------------------------------}
-
-newtype TCN a = T { runTCN :: String -> Int -> Maybe (a,Int) }
-
-instance Functor TCN where
-  fmap f m = do x <- m
-                return (f x)
-
-instance Monad TCN where
-  return x  = T $ \_ s -> return (x,s)
-  T m >>= f = T $ \r s -> do (a,s1) <- m r s
-                             let T m1   = f a
-                             m1 r $! s1
-
-instance MonadPlus TCN where
-  mzero = T (\_ _ -> Nothing)
-  mplus = error "mplus is unused"
-
-
-newGoal :: Prop -> TCN Goal
-newGoal p = T $ \r s ->
-  do let s1 = s + 1
-     s1 `seq` Just (Goal { goalName = r ++ "_" ++ show s, goalProp = p }, s1)
-
-
-{-------------------------------------------------------------------------------
-The Solver
-
-The purpose of the solver is to turn an arbitrary set of propositions
-into an inert one.  This is done by starting with some inert set
-(e.g., the empty set of propositions) and then adding each new proposition
-one at a time.  Assumptions and goals are added in different ways, so
-we have two different functions to add a proposition to an existing
-inert set.
-
-If successful, both functions return a \Verb"PassResult" value, which
-contains an updated inert set and, potentially, some additional propositions
-that need to be added to the set.  The actual solver just keeps using these
-two functions until it runs out of work to do.
-Note that we start by first adding all assumptions, and only then we consider
-the goals because the assumptions might help us to solve the goals.
--------------------------------------------------------------------------------}
-
-data SolverS = SolverS
-  { ssTodoFacts :: Props Fact
-  , ssTodoGoals :: [Goal]
-  , ssSolved    :: [(EvVar,Proof)]
-  , ssInerts    :: Inerts
-  }
-
-initSolverS :: SolverS
-initSolverS = SolverS
-  { ssTodoGoals = []
-  , ssTodoFacts = Props.empty
-  , ssSolved    = []
-  , ssInerts    = noInerts
-  }
-
-
-{- | When processing facts, it is more
-efficient if we first process equalities, then order and, finally, all other
-facts.  To make this easy, we store unprocessed facts as 'Prpos' instead
-of just using a list.
-
-We add equalities first because they might lead to improvements that,
-in turn, would enable the discovery of additional facts.  In particular, if a
-presently known fact gets improved, then the old fact is removed from the
-list of known facts, and its improved version is added as new work.  Thus,
-if we process equalities first, we don't need to do any of this "restarting".
-
-For similar reasons we process ordering predicates before others: they
-make it possible for certain conditional rules to fire.  For example,
-the cancellation rule for multiplication requires that the argument that
-is being cancelled is greater than 0.
--}
-
-getFact :: SolverS -> Maybe (Fact, SolverS)
-getFact s = case getOne (ssTodoFacts s) of
-              Nothing     -> Nothing
-              Just (f,fs) -> Just (f, s { ssTodoFacts = fs })
-
-getGoal :: SolverS -> Maybe (Goal, SolverS)
-getGoal s = case ssTodoGoals s of
-              []     -> Nothing
-              g : gs -> Just (g, s { ssTodoGoals = gs })
-
-nextState :: PassResult -> SolverS -> SolverS
-nextState r s =
-  SolverS { ssTodoFacts = Props.union (newFacts r) (ssTodoFacts s)
-          , ssTodoGoals = newGoals r ++ ssTodoGoals s
-          , ssInerts    = newInerts r
-          , ssSolved    = solvedWanted r ++ ssSolved s
-          }
-
-
-addWorkItems :: SolverS -> String -> Int -> Maybe SolverS
-addWorkItems is r s = fst `fmap` runTCN (addWorkItemsM is) r s
-
--- The final state should have empty 'todo*' queues.
-addWorkItemsM :: SolverS -> TCN SolverS
-
-addWorkItemsM ss0 =
-  case getFact ss0 of
-    Just (fact, ss1) ->
-      do r <- addGiven fact (ssInerts ss1)
-         addWorkItemsM (nextState r ss1)
-
-    Nothing ->
-      case getGoal ss0 of
-       Just (goal, ss1) ->
-         do r <- addWanted goal (ssInerts ss1)
-            addWorkItemsM (nextState r ss1)
-
-       Nothing -> return ss0
-
-{-------------------------------------------------------------------------------
-Pretty Printing
--------------------------------------------------------------------------------}
-
-
-
-
-instance PP Inerts where
-  pp is = pp (given is) $$ pp (wanted is)
 
 
 {-------------------------------------------------------------------------------

@@ -14,14 +14,12 @@ import Text.PrettyPrint
 import Control.Monad(guard)
 
 newtype LeqFacts = LM (M.Map Term LeqEdges)
-                   deriving Show
 
 data LeqEdge = LeqEdge { leProof :: Proof, leTarget :: Term }
-               deriving Show
 
 data LeqEdges = LeqEdges { lnAbove :: S.Set LeqEdge -- proof: here   <= above
                          , lnBelow :: S.Set LeqEdge -- proof: bellow <= here
-                         } deriving Show
+                         }
 
 
 

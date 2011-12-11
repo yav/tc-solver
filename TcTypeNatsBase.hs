@@ -1,16 +1,40 @@
 {- Terms and Propositions -}
-module TcTypeNatsBase where
+module TcTypeNatsBase
+  ( Var(..)
+  , Term(..)
+  , num
+  , Pred(..)
+  , arity
+  , Prop(..)
+  , Goal(..)
+  , Fact(..)
+  , HasProp(..)
+  , propPred
+  , propArgs
+  , Theorem(..)
+  , Proof(..)
+  , byRefl
+  , isRefl
+  , bySym
+  , byTrans
+  , byLeqDef
+  , byLeqRefl
+  , byLeqTrans
+  , byLeqAsym
+  , byLeq0
+  , byCong
+  , proofLet
+  , PP(..)
+  , TCN
+  , EvVar
+  , newEvVar
+  ) where
 
+import TcTypeNatsStandAlone
 import Text.PrettyPrint
 import Data.List(zipWith5)
 
-
-type Xi     = String
 newtype Var = V Xi
-              deriving Show
-
-type EvVar  = String
-
 
 {- The 'Xi' in the 'Num' constructor stores the original 'Xi' type that
 gave rise to the number. It is there in an attempt to preserve type synonyms. -}
@@ -23,9 +47,7 @@ gave rise to the number. It is there in an attempt to preserve type synonyms. -}
     a number and its neighbours.
 -}
 
-data Term = Var Var
-          | Num Integer (Maybe Xi)
-            deriving (Eq,Ord,Show)
+data Term = Var Var | Num Integer (Maybe Xi)
 
 num :: Integer -> Term
 num n = Num n Nothing
@@ -54,8 +76,8 @@ arity pr =
 data Prop = Prop Pred [Term]
             deriving (Eq,Ord)
 
-wfProp :: Prop -> Bool
-wfProp (Prop p xs) = arity p == length xs
+_wfProp :: Prop -> Bool
+_wfProp (Prop p xs) = arity p == length xs
 
 
 -- | Goals represent propositions that need prood.
@@ -86,7 +108,7 @@ instance HasProp Prop where getProp = id
 instance HasProp Goal where getProp = goalProp
 instance HasProp Fact where getProp = factProp
 
-
+--------------------------------------------------------------------------------
 
 
 
@@ -125,7 +147,6 @@ data Theorem  = EqRefl      -- forall a.                        a = a
 
 data Proof    = ByAsmp EvVar
               | Using Theorem [Term] [Proof]   -- Instantiation, sub-proofs
-                deriving Show
 
 byRefl :: Term -> Proof
 byRefl t = Using EqRefl [t] []
@@ -217,11 +238,16 @@ instance Eq Var where
 instance Ord Var where
   compare (V x) (V y) = cmpType x y
 
-eqType :: Xi -> Xi -> Bool
-eqType = (==)
+instance Eq Term where
+  Var x   == Var y    = x == y
+  Num x _ == Num y _  = x == y
+  _       == _        = False
 
-cmpType :: Xi -> Xi -> Ordering
-cmpType = compare
+instance Ord Term where
+  compare (Var x) (Var y)     = compare x y
+  compare (Var _) _           = LT
+  compare _ (Var _)           = GT
+  compare (Num x _) (Num y _) = compare x y
 
 {- We compare facts based only on the property they state because we are
 not interested in facts that state the same thing but differ in the proof. -}
@@ -241,7 +267,7 @@ class PP a where
   pp :: a -> Doc
 
 instance PP Var where
-  pp (V x) = text x
+  pp (V x) = pprXi x
 
 instance PP Term where
   pp (Var x)    = pp x
@@ -274,12 +300,11 @@ instance PP Goal where
   pp f = text "W:" <+> pp (goalProp f)
 
 instance PP Proof where
-  pp (ByAsmp e) = text e
+  pp (ByAsmp e) = pprEvVar e
   pp (Using x ts ps) = text (show x) <> inst $$ nest 2 (vcat (map pp ps))
     where inst = case ts of
                    [] -> empty
                    _  -> text "@" <> parens (fsep $ punctuate comma $ map pp ts)
-
 
 
 

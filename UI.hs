@@ -20,6 +20,7 @@ import TcTypeNatsBase
 import TcTypeNatsFacts
 import TcTypeNatsProps as Props
 import TcTypeNats
+import TcTypeNatsStandAlone
 
 
 port :: PortNumber
@@ -84,6 +85,9 @@ addWorkItemsUI (n,ws) is = addWorkItems is1 ('w' : show n) (length ws + 1)
   where is1 = is { ssTodoGoals = [ w | Wanted w <- ws ]
                  , ssTodoFacts = Props.fromList [ g | Given g  <- ws ]
                  }
+
+addWorkItems :: SolverS -> String -> Int -> Maybe SolverS
+addWorkItems is r s = fst `fmap` runTCN (addWorkItemsM is) r s
 
 processCmd :: Cmd -> S -> S
 processCmd cmd s =
@@ -173,7 +177,7 @@ parseWI n txt =
   where
   mkGoal x p = Wanted Goal { goalName = mkName "w" x, goalProp = p }
   mkFact x p = Given Fact { factProof = ByAsmp (mkName "g" x), factProp = p }
-  mkName p x  = p ++ show n ++ "_" ++ show (x :: Integer)
+  mkName p x  = strEvVar (p ++ show n ++ "_" ++ show (x :: Integer))
 
 
 parseProp :: Int -> String -> Maybe [Prop]
@@ -188,7 +192,7 @@ parseProp n txt =
 
 renderWI :: WorkItem -> String
 renderWI (Wanted w) = list [ str "Wanted", ppp (goalName w) (goalProp w) ]
-  where ppp x y = str (x ++ ": " ++ show (pp y))
+  where ppp x y = str (show (pprEvVar x) ++ ": " ++ show (pp y))
 renderWI (Given  f) = list [str "Given",  str $ show $ pp $ factProp f ]
 
 renderIS :: Maybe SolverS -> String
@@ -200,7 +204,7 @@ renderIS (Just ss) =
          [ renderWI (Wanted w) | w <- Props.toList (wanted xs) ] ++
          [ list [ show "Proof", show $ ppp p ] | p <- ps ]
        )
-  where ppp (x,y) = show (text x <+> text ":" <+> pp y)
+  where ppp (x,y) = show (pprEvVar x <+> text ":" <+> pp y)
         xs = ssInerts ss
         ps = ssSolved ss
 
@@ -242,7 +246,7 @@ pAtom pref n =
             return (Num x Nothing, n, [])
        , do a <- satisfy (\x -> isAlpha x || x == '_')
             as <- munch (\x -> isAlphaNum x || x == '_')
-            return (Var (V (a:as)), n, [])
+            return (Var $ V $ strXi $ a:as, n, [])
        , do (t1,op,t2,n',es) <- between (tchar '(') (tchar ')') (pTerm pref n)
             let x = Var (newVar pref n')
             return (x, n'+1, Prop op [t1,t2,x] : es)
@@ -260,7 +264,7 @@ pOp = msum [ tchar '+' >> return Add
            ]
 
 newVar :: Int -> Int -> Var
-newVar pref n = V $ (vars !! n) ++ "_" ++ show pref
+newVar pref n = V $ strXi $ (vars !! n) ++ "_" ++ show pref
   where vars      = concatMap chunk [ 0 :: Integer .. ]
         toVar c a = if a == 0 then [c] else c : show a
         chunk n1  = map (`toVar` n1) [ 'a' .. 'z' ]
@@ -279,6 +283,7 @@ readMb'    :: ReadS a -> String -> Maybe a
 readMb' f x = case f x of
                 [(a,"")] -> Just a
                 _ -> Nothing
+
 
 
 
