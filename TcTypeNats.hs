@@ -8,10 +8,11 @@ inert set.
 -}
 
 module TcTypeNats
-  ( SolverS(..)
-  , initSolverS
-  , addWorkItemsM
-  , Inerts(..)
+  ( Inerts(..)
+  , noInerts
+  , addGiven
+  , addWanted
+  , PassResult(..)
   ) where
 
 import           TcTypeNatsBase
@@ -28,17 +29,9 @@ import Data.Maybe(fromMaybe,isNothing)
 import Data.List(find)
 import Control.Monad(MonadPlus(..),msum,foldM)
 
-data SolverS = SolverS
-  { ssTodoFacts :: Props Fact
-  , ssTodoGoals :: [Goal]
-  , ssSolved    :: [(EvVar,Proof)]
-  , ssInerts    :: Inerts
-  }
 
-
-{-|
-The inert set is a collection of propositions, which keeps track
-of the facts that are known by the solver, as well as any goals that
+{-| The inert set is a collection of propositions, which keeps track
+of the facts that are known, as well as any goals that
 were attempted but not solved.  We refer to this set as ``inert'' because
 the propositions in it cannot ``interact'' with each other. -}
 data Inerts = Inerts { given :: Facts, wanted :: Props Goal }
@@ -49,73 +42,6 @@ noInerts = Inerts { given = Facts.empty, wanted = Props.empty }
 instance PP Inerts where
   pp is = pp (given is) $$ pp (wanted is)
 
-
-
-initSolverS :: SolverS
-initSolverS = SolverS
-  { ssTodoGoals = []
-  , ssTodoFacts = Props.empty
-  , ssSolved    = []
-  , ssInerts    = noInerts
-  }
-
-
--- | The final state should have empty 'todo*' queues.
-addWorkItemsM :: SolverS -> TCN SolverS
-
-addWorkItemsM ss0 =
-  case getFact ss0 of
-    Just (fact, ss1) ->
-      do r <- addGiven fact (ssInerts ss1)
-         addWorkItemsM (nextState r ss1)
-
-    Nothing ->
-      case getGoal ss0 of
-       Just (goal, ss1) ->
-         do r <- addWanted goal (ssInerts ss1)
-            addWorkItemsM (nextState r ss1)
-
-       Nothing -> return ss0
-
-
-
-
-{- | When processing facts, it is more
-efficient if we first process equalities, then order and, finally, all other
-facts.  To make this easy, we store unprocessed facts as 'Prpos' instead
-of just using a list.
-
-We add equalities first because they might lead to improvements that,
-in turn, would enable the discovery of additional facts.  In particular, if a
-presently known fact gets improved, then the old fact is removed from the
-list of known facts, and its improved version is added as new work.  Thus,
-if we process equalities first, we don't need to do any of this "restarting".
-
-For similar reasons we process ordering predicates before others: they
-make it possible for certain conditional rules to fire.  For example,
-the cancellation rule for multiplication requires that the argument that
-is being cancelled is greater than 0.
--}
-
-getFact :: SolverS -> Maybe (Fact, SolverS)
-getFact s = case getOne (ssTodoFacts s) of
-              Nothing     -> Nothing
-              Just (f,fs) -> Just (f, s { ssTodoFacts = fs })
-
-getGoal :: SolverS -> Maybe (Goal, SolverS)
-getGoal s = case ssTodoGoals s of
-              []     -> Nothing
-              g : gs -> Just (g, s { ssTodoGoals = gs })
-
-nextState :: PassResult -> SolverS -> SolverS
-nextState r s =
-  SolverS { ssTodoFacts = Props.union (newFacts r) (ssTodoFacts s)
-          , ssTodoGoals = newGoals r ++ ssTodoGoals s
-          , ssInerts    = newInerts r
-          , ssSolved    = solvedWanted r ++ ssSolved s
-          }
-
---------------------------------------------------------------------------------
 
 
 
