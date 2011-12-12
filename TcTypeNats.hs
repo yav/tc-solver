@@ -1,18 +1,16 @@
-{- |
-The purpose of the solver is to turn an arbitrary set of propositions
-into an inert one.  This is done by starting with some inert set
-(e.g., the empty set of propositions) and then adding each new proposition
-one at a time.  Assumptions and goals are added in different ways, so
-we have two different functions to add a proposition to an existing
-inert set.
+{-|
+The inert set is a collection of propositions, which keeps track
+of the facts that are known, as well as any goals that
+were attempted but not solved.  We refer to this set as ``inert'' because
+the propositions in it cannot ``interact'' with each other.
 -}
 
 module TcTypeNats
   ( Inerts(..)
   , noInerts
-  , addGiven
-  , addWanted
-  , PassResult(..)
+  , insertFact
+  , insertGoal
+  , InsertInert(..)
   ) where
 
 import           TcTypeNatsBase
@@ -29,30 +27,28 @@ import Data.Maybe(fromMaybe,isNothing)
 import Data.List(find)
 import Control.Monad(MonadPlus(..),msum,foldM)
 
+-- | An colection of a facts and goals that cannot interact with each other.
+data Inerts = Inerts { facts :: Facts, goals :: Props Goal }
 
-{-| The inert set is a collection of propositions, which keeps track
-of the facts that are known, as well as any goals that
-were attempted but not solved.  We refer to this set as ``inert'' because
-the propositions in it cannot ``interact'' with each other. -}
-data Inerts = Inerts { given :: Facts, wanted :: Props Goal }
-
+-- | The empty inert collection.
 noInerts :: Inerts
-noInerts = Inerts { given = Facts.empty, wanted = Props.empty }
+noInerts = Inerts { facts = Facts.empty, goals = Props.empty }
 
 instance PP Inerts where
-  pp is = pp (given is) $$ pp (wanted is)
+  pp is = pp (facts is) $$ pp (goals is)
 
 
 
+-- | The result of trying to insert a new goal or fact to an inert set.
+data InsertInert = InsertInert
+  { solvedGoals :: [(EvVar,Proof)]    -- ^ Goals that were proved.
+  , newGoals     :: [Goal]            -- ^ New goals that need proof.
+  , newFacts     :: Props Fact        -- ^ New facts that need proof.
+  , newInerts    :: Inerts            -- ^ The new inert set.
+  }
 
-data PassResult = PassResult { solvedWanted :: [(EvVar,Proof)]
-                             , newGoals     :: [Goal]
-                             , newFacts     :: Props Fact
-                             , newInerts    :: Inerts
-                             }
-
-noChanges :: Inerts -> PassResult
-noChanges is = PassResult { solvedWanted = []
+noChanges :: Inerts -> InsertInert
+noChanges is = InsertInert { solvedGoals = []
                           , newGoals     = []
                           , newFacts     = Props.empty
                           , newInerts    = is
@@ -66,27 +62,25 @@ noChanges is = PassResult { solvedWanted = []
 If the assumptions was added to the set, then we remove any existing goals
 and add them as new work, in case they can be solved in terms of the
 new fact. -}
-addGiven  :: Fact -> Inerts -> TCN PassResult
-addGiven g props =
-  case addFact g (given props) of
+insertFact  :: Fact -> Inerts -> TCN InsertInert
+insertFact g props =
+  case addFact g (facts props) of
     Inconsistent  -> mzero
     AlreadyKnown  -> return (noChanges props)
     Improved fact -> return (noChanges props)
                             { newFacts = Props.singleton fact }
     Added new newProps -> return
-      PassResult { newGoals      = Props.toList (wanted props)
-                 , newFacts      = new
-                 , solvedWanted  = []
-                 , newInerts     = Inerts { given  = newProps
-                                          , wanted = Props.empty
+      InsertInert { newGoals    = Props.toList (goals props)
+                  , newFacts     = new
+                  , solvedGoals  = []
+                  , newInerts    = Inerts { facts  = newProps
+                                          , goals  = Props.empty
                                           }
-                 }
+                  }
 
 
 
-{- 'addFact' attempts to extend a collection of already known facts.
-The resulting value contains information about how the new fact
-interacted with the already existing facts.
+{-| Try to extend a collection of already known facts.
 
 Note that adding a fact may result in removing some existing facts from
 the set (e.g., if they become obsolete in the presence of the new fact).
@@ -119,9 +113,8 @@ addFact f fs =
   impossible _ = False
 
 
-{-------------------------------------------------------------------------------
-Using Existing Goals
--------------------------------------------------------------------------------}
+
+-- Using Existing Goals --------------------------------------------------------
 
 assumeGoals :: MonadPlus m => [Goal] -> Facts -> m Facts
 assumeGoals as bs = maybe mzero return
@@ -165,127 +158,43 @@ addFactsTrans fs facts0 =
 
 
 
-{-------------------------------------------------------------------------------
-Results of Entailement
--------------------------------------------------------------------------------}
 
-{- | The entailment function may return one of three possible answers,
-informally corresponding to ``certainly not'', ''not in its current form'',
-and ''(a qualified) yes''. -}
-data Answer = NotForAny | NotForAll | YesIf [Goal] Proof
+--------------------------------------------------------------------------------
 
+-- | Inert a new goal to an inetr set.
+insertGoal :: Goal -> Inerts -> TCN InsertInert
+insertGoal w props =
 
-{- More precisely, \Verb"NotForAny" asserts that the proposition in question
-contradicts the given set of assumptions, no matter how we instantiate its
-free variables (i.e., we have a proof of the proposition's negation).
-The following two examples both result in a \Verb"NotForAny" answer
-(in the examples we use the more traditional mathematical notation
-$ps \ent p$ for entailment)
-$$
-\begin{aligned}
-      & \ent 2 + 3 = 6 &\mapsto~\mathtt{NotForAny}\\
-x = 2 & \ent x = 3     &\mapsto~\mathtt{NotForAny}
-\end{aligned}
-$$
-The first equation is is inconsistent with the theory in general, while the
-second contradicts a particular assumption.
-
-If the entailment function returns \Verb"NotForAll", then the proposition in
-question is not entailed by the given assumptions but it also does not
-contradict them.  Typically this happens when a proposition contains
-free variables, and the entailment of the proposition depends on how
-these variables are instantiated (e.g., some instantiations result in
-propositions that are consistent with the assumptions, while others do not).
-For example, consider the following entailment question:
-$$
-\begin{aligned}
-& \ent x + y = 6     &\mapsto~\mathtt{NotForAll}
-\end{aligned}
-$$
-This results in \Verb"NotForAll" because we cannot determine if the
-proposition holds without further assumptions about $x$ and $y$---%
-some instantiations (e.g., $x = 2, y = 4$)
-are entailed, while others (e.g., $x = 7, y = 3$) are not.
-
-Finally, the entailment function may give a positive answer, with an optional
-list of sub-goals.  Consider the following examples:
-$$
-\begin{aligned}
-& \ent 1 + 2 = 3 &&\mapsto~\mathtt{YesIf~[]} \\
-& \ent x + 0 = x &&\mapsto~\mathtt{YesIf~[]} \\
-& \ent 3 + 5 = x &&\mapsto~\mathtt{YesIf~[x=8]}
-\end{aligned}
-$$
-The first two examples illustrate unconditional entailment, while the third
-example asserts that the proposition is entailed if and only if $x = 8$ holds.
-The sub-goals contained in a \Verb"YesIf" answer should be logically
-equivalent to the original goal (under the given assumptions) but also
-``simpler'', a concept that we shall discuss further in
-Section~\ref{sec_improvement}.  -}
-
-
-
-{-------------------------------------------------------------------------------
-Adding a New Goal (wanted)
-
-Extending the inert set with a new goal is a little more complex then
-adding a new assumption but the overall structure of the algorithm is similar.
-Again, we use the entailment function to check for interactions
-between the inert set and the new goal but we also use existing goals
-as assumptions.  This is useful because we may be able to discharge
-the new goal in terms of already existing goals, thus leaving the inert
-set unchanged.
--------------------------------------------------------------------------------}
-
-addWanted :: Goal -> Inerts -> TCN PassResult
-addWanted w props =
-
-     do asmps <- assumeGoals wantedList (given props)
+     do asmps <- assumeGoals wantedList (facts props)
         res <- entails asmps w
         case res of
 
-{- The first two cases---when there is interaction---are the same as for
-adding an assumption:  inconsistencies result in an error, while solving
-the new goal does not affect the inert set but may add a new formulation
-of the goal to the work queue. -}
-
           NotForAny -> mzero
 
-          YesIf ps proof -> return PassResult
-            { solvedWanted  = [ (goalName w, proof) ]
-            , newGoals      = ps
-            , newFacts      = Props.empty
-            , newInerts     = props
+          YesIf ps proof -> return InsertInert
+            { solvedGoals = [ (goalName w, proof) ]
+            , newGoals    = ps
+            , newFacts    = Props.empty
+            , newInerts   = props
             }
 
-{- The major difference in the algorithm is when there is no interaction
-between the new goal and the existing inert set.  In this case we
-add the new goal to the inert set but, in addition, we need to check
-if it is possible to solve any of the already existing goals in terms
-of the new goal.  We cannot simply add the existing goals back on the
-work queue because this may lead to a non-terminating loop:
-any two goals that cannot be solved in terms
-of each other are going to keep restarting each other forever.  Instead,
-we examine the existing goals one at a time and check for interactions in
-the presence of the new goal, removing goals that are entailed, and leaving
-goals that result in no interaction in the inert set. -}
-
+          -- More details about this in the note bellow.
           NotForAll ->
-                do asmps0 <- assumeGoals [w] (given props)
+                do asmps0       <- assumeGoals [w] (facts props)
                    (solved,new) <- checkExisting [] [] asmps0 wantedList
                    let keepGoal p = not (goalName p `elem` map fst solved)
 
-                   return PassResult
-                     { solvedWanted = solved
+                   return InsertInert
+                     { solvedGoals = solved
                      , newGoals     = new
                      , newFacts     = Props.empty
                      , newInerts =
-                        props { wanted = Props.insert w
-                                         (Props.filter keepGoal (wanted props)) }
+                        props { goals = Props.insert w
+                                        (Props.filter keepGoal (goals props)) }
                      }
 
   where
-  wantedList        = Props.toList (wanted props)
+  wantedList        = Props.toList (goals props)
 
 {- The function 'checkExisting' has the details of how to check for interaction
 between some existing goal, 'w1', and the new goal 'w'.  The function uses
@@ -320,44 +229,47 @@ four pieces of state:
                                 asmps2
                                 ws1
 
+{- Note: What happens when there is no interaction.
 
-
-{- To see the algorithm in action, consider the following example:
-
-New goal:   2 <= x
-Inert set:  { wanted = [x + 5 = y, 1 <= x] }
-
-Step 1: entails [x + 5 = y, 1 <= x] (2 <= x)      -->  NotForAll
-Step 2: Add (2 <= x) to the inert set and examine existing goals:
-  Step 2.2: entails [2 <= x, 1 <= x] (x + 5 = y)  --> NotForAll // keep
-  Step 2.1: entails [2 <= x, x + 5 = y] (1 <= x)  --> YesIf []  // remove
-
-New inert set: { wanted = [2 <= x, x + 5 = y] }
-
+When there is no interaction between the new goal and the existing
+we add the new goal to the inert set but, in addition, we check
+if it is possible to solve any of the already existing goals in terms
+of the new one.  Note that we cannot simply add the existing goals back on the
+work queue because this may lead to a non-terminating loop:
+any two goals that cannot be solved in terms
+of each other are going to keep restarting each other forever.  Instead,
+we examine the existing goals one at a time and check for interactions in
+the presence of the new goal, removing goals that are entailed, and leaving
+goals that result in no interaction in the inert set.
 -}
 
 
-{-------------------------------------------------------------------------------
-Entailment
 
-A central component of the solver is the entailment function, which determines
-if a set of assumptions (the first argument), entail a certain proposition
-(the second argument).
--------------------------------------------------------------------------------}
+
+
+
+-- Entailment ------------------------------------------------------------------
+
+-- | Answer of entailment.
+data Answer = NotForAny           -- ^ The goal is impossible (XXX: add proof?)
+            | NotForAll           -- ^ We don't know how to solve this.
+            | YesIf [Goal] Proof  -- ^ We solved it in terms of other goals.
+
 
 
 entailsSimple :: Facts -> Goal -> TCN Answer
 entailsSimple ps p =
   do improved <- impGoal (getEqFacts ps) p
-     return $ fromMaybe NotForAll
-            $ msum [ do (p1,proof) <- improved
-                        return (YesIf [p1] proof)
+     return
+       $ fromMaybe NotForAll
+       $ msum [ do (p1,proof) <- improved
+                   return (YesIf [p1] proof)
 
-                   , do proof <- case goalProp p of
-                                   Prop Leq [s,t] -> Leq.prove (getLeqFacts ps) s t
-                                   g -> solve (getOtherFacts ps) g
-                        return (YesIf [] proof)
-                   ]
+              , do proof <- case goalProp p of
+                              Prop Leq [s,t] -> Leq.prove (getLeqFacts ps) s t
+                              g -> solve (getOtherFacts ps) g
+                   return (YesIf [] proof)
+              ]
 
 entails :: Facts -> Goal -> TCN Answer
 
@@ -373,12 +285,14 @@ entails ps p =
      case attempt1 of
        NotForAll
          | improvable ->    -- Is there room for improvement?
+
+         -- See note bellow for an explanation on what's going on here.
          case assumeGoals [p] ps of
 
            -- The new goal contradicts the given assumptions.
            Nothing -> return NotForAny
 
-           {- New facts!  We consider only the equalities. -}
+           -- New facts!  We consider only the equalities.
            Just new ->
              do let su1 = getEqFacts new
                 eqns <- mapM newGoal $ map factProp $ Subst.toFacts su1
@@ -397,8 +311,10 @@ entails ps p =
                        _         -> True
 
 
-{- Note A: We try improvement proper.  This means that we
-need to find a logically equivalent set of goals that might lead to progress.
+{- Note About "Improvement Proper"
+
+This means that we are trying to find a logically equivalent set
+of goals that might lead to progress.
 
 The new goals needs to imply the original to preserve soundness (i.e.,
 we don't just loose goals).  Also, the original goal needs to imply the new
@@ -430,7 +346,7 @@ newGoal p =
   do x <- newEvVar
      return Goal { goalName = x, goalProp = p }
 
-{- Given a goal, return a new goal, and a proof which
+{-| Given a goal, return a new goal and a proof that
 solves the old goal in terms of the new one.
 We return 'Nothing' if nothing got improved. -}
 impGoal :: Subst -> Goal -> TCN (Maybe (Goal, Proof))
@@ -459,9 +375,7 @@ byAsmp ps p =
 
 
 
-{-------------------------------------------------------------------------------
-Misc.
--------------------------------------------------------------------------------}
+-- Debugging -------------------------------------------------------------------
 
 ppTrace :: Doc -> a -> a
 ppTrace d = trace (show d)

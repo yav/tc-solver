@@ -200,8 +200,8 @@ renderIS Nothing = list [ list [ str "Wanted", str "(inconsistent)" ]
                         , list [ str "Given",  str "(inconsistent)" ]
                         ]
 renderIS (Just ss) =
-  list ( [ renderWI (Given g)  | g <- Facts.toList (given xs)  ] ++
-         [ renderWI (Wanted w) | w <- Props.toList (wanted xs) ] ++
+  list ( [ renderWI (Given g)  | g <- Facts.toList (facts xs)  ] ++
+         [ renderWI (Wanted w) | w <- Props.toList (goals xs) ] ++
          [ list [ show "Proof", show $ ppp p ] | p <- ps ]
        )
   where ppp (x,y) = show (pprEvVar x <+> text ":" <+> pp y)
@@ -311,13 +311,13 @@ addWorkItemsM :: SolverS -> TCN SolverS
 addWorkItemsM ss0 =
   case getFact ss0 of
     Just (fact, ss1) ->
-      do r <- addGiven fact (ssInerts ss1)
+      do r <- insertFact fact (ssInerts ss1)
          addWorkItemsM (nextState r ss1)
 
     Nothing ->
       case getGoal ss0 of
        Just (goal, ss1) ->
-         do r <- addWanted goal (ssInerts ss1)
+         do r <- insertGoal goal (ssInerts ss1)
             addWorkItemsM (nextState r ss1)
 
        Nothing -> return ss0
@@ -352,12 +352,12 @@ getGoal s = case ssTodoGoals s of
               []     -> Nothing
               g : gs -> Just (g, s { ssTodoGoals = gs })
 
-nextState :: PassResult -> SolverS -> SolverS
+nextState :: InsertInert -> SolverS -> SolverS
 nextState r s =
   SolverS { ssTodoFacts = Props.union (newFacts r) (ssTodoFacts s)
           , ssTodoGoals = newGoals r ++ ssTodoGoals s
           , ssInerts    = newInerts r
-          , ssSolved    = solvedWanted r ++ ssSolved s
+          , ssSolved    = solvedGoals r ++ ssSolved s
           }
 
 --------------------------------------------------------------------------------
