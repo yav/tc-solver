@@ -1,7 +1,7 @@
 
 .PHONY: default clean
 
-default: note.html note.pdf
+default: note.html note.pdf evidence.pdf evidence.html
 
 
 BUILD=build
@@ -16,9 +16,10 @@ BUILD=build
 
 
 %.pdf: %.tex
-	mkdir $(BUILD)
+	mkdir -p $(BUILD)
+	pdflatex --output-directory $(BUILD) $<
 	pdflatex --output-directory $(BUILD) $<
 	cp $(BUILD)/$@ $@
 
 clean:
-	rm -rf build
+	rm -rf build *.pdf *.html
