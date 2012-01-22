@@ -108,8 +108,8 @@ addFact f fs =
   where
   -- XXX: It would be nicer to make this less ad-hoc.
   impossible (Prop Mul [Num x _, _, Num y _]) = isNothing (divide y x)
-  impossible (Prop Exp [Num x _, _, Num y _]) = isNothing (descreteLog y x)
-  impossible (Prop Exp [_, Num x _, Num y _]) = isNothing (descreteRoot y x)
+  impossible (Prop Exp [Num x _, _, Num y _]) = isNothing (discreteLog y x)
+  impossible (Prop Exp [_, Num x _, Num y _]) = isNothing (discreteRoot y x)
   impossible _ = False
 
 

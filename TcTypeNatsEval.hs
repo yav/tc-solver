@@ -10,8 +10,8 @@ minus x y = if x >= y then Just (x - y) else Nothing
 
 -- | Compute the exact root of two natural numbers.
 -- The second argument specifies which root we are computing.
-descreteRoot :: Integer -> Integer -> Maybe Integer
-descreteRoot x0 root = search 0 x0
+discreteRoot :: Integer -> Integer -> Maybe Integer
+discreteRoot x0 root = search 0 x0
   where
   search from to = let x = from + div (to - from) 2
                        a = x ^ root
@@ -23,13 +23,13 @@ descreteRoot x0 root = search 0 x0
 
 -- | Compute the exact logarithm of two natural numbers.
 -- The logarithm base is the second argument.
-descreteLog :: Integer -> Integer -> Maybe Integer
-descreteLog 0 _                 = Nothing
-descreteLog _ 1                 = Nothing
-descreteLog 1 _                 = Just 0
-descreteLog _ 0                 = Nothing
-descreteLog x0 base = case divMod x0 base of
-                        (x,0) -> fmap (1+) (descreteLog x base)
+discreteLog :: Integer -> Integer -> Maybe Integer
+discreteLog 0 _                 = Nothing
+discreteLog _ 1                 = Nothing
+discreteLog 1 _                 = Just 0
+discreteLog _ 0                 = Nothing
+discreteLog x0 base = case divMod x0 base of
+                        (x,0) -> fmap (1+) (discreteLog x base)
                         _     -> Nothing
 
 -- | Divide two natural numbers.
