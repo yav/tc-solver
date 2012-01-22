@@ -24,11 +24,13 @@ descreteRoot x0 root = search 0 x0
 -- | Compute the exact logarithm of two natural numbers.
 -- The logarithm base is the second argument.
 descreteLog :: Integer -> Integer -> Maybe Integer
-descreteLog 0  _  = Just 0
-descreteLog x0 base | base == x0  = Just 1
+descreteLog 0 _                 = Nothing
+descreteLog _ 1                 = Nothing
+descreteLog 1 _                 = Just 0
+descreteLog _ 0                 = Nothing
 descreteLog x0 base = case divMod x0 base of
-                         (x,0) -> fmap (1+) (descreteLog x base)
-                         _     -> Nothing
+                        (x,0) -> fmap (1+) (descreteLog x base)
+                        _     -> Nothing
 
 -- | Divide two natural numbers.
 divide :: Integer -> Integer -> Maybe Integer
