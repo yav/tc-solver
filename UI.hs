@@ -31,18 +31,10 @@ info = putStrLn
 
 --------------------------------------------------------------------------------
 
-start :: String
-start | "mingw" `isInfixOf` os = "start"
-      | "inux" `isInfixOf` os = "gnome-open"
-      | otherwise             = "open"
-
-
-
 main :: IO ()
 main = withSocketsDo
      $ do s <- listenOn (PortNumber port)
           info $ "Listening on port " ++ show port
-          ExitSuccess <- system (start ++ " UI.html")
           loop s initS `finally` sClose s
   where loop s st = loop s =<< onConnect st =<< accept s
 
@@ -53,7 +45,7 @@ onConnect s (h,host,p) =
      hSetNewlineMode h NewlineMode { inputNL = CRLF, outputNL = CRLF }
      (url,_) <- getRequest h
      case parse url of
-       Nothing -> respond h "402 Bad request" "[]" >> return s
+       Nothing -> initPage h >> return s
        Just cmd ->
          do let s1 = processCmd cmd s
                 wis = case cmd of
@@ -65,6 +57,17 @@ onConnect s (h,host,p) =
                                )
             return s1
 
+initPage h =
+  do txt <- readFile "UI.html"
+     info "Loding start page"
+     hPutStrLn h $ unlines
+       [ "HTTP/1.1 200 OK"
+       , "Content-Type: text/html; charset=UTF-8"
+       ]
+     hSetNewlineMode h noNewlineTranslation
+     hPutStr h txt -- XXX: encode utf-8
+     hClose h
+     info "Done with start page"
 
 
 
@@ -116,12 +119,12 @@ data Err      = BadReqStart String
 instance Exception Err
 
 
+
 respond :: Handle -> String -> String -> IO ()
 respond h resp txt =
   do hPutStrLn h $ unlines
        [ "HTTP/1.1 " ++ resp
        , "Content-Type: application/json; charset=UTF-8"
-       , "Access-Control-Allow-Origin: *"
        ]
      info txt
      hSetNewlineMode h noNewlineTranslation
@@ -131,6 +134,7 @@ respond h resp txt =
 getRequest :: Handle -> IO Request
 getRequest h =
   do first <- hGetLine h
+                `catch` \(SomeException _) -> throwIO (BadReqStart "")
      case words first of
        ["GET",u,"HTTP/1.1"] ->
          do hs <- getHeaders h []
@@ -140,6 +144,7 @@ getRequest h =
 getHeaders :: Handle -> [Header] -> IO [Header]
 getHeaders h prev =
   do l <- hGetLine h
+                `catch` \(SomeException _) -> throwIO (BadReqHeader "")
      case l of
        "" -> return prev
        _  -> case break (':' ==) l of
