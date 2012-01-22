@@ -18,6 +18,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Text.PrettyPrint(vcat)
 import Control.Monad(guard)
+import Data.List(mapAccumL)
 
 -- | A collection of facts about the ordering of terms.
 newtype Facts = LM (M.Map Term Edges)
@@ -51,7 +52,7 @@ nodeFacts x es = toFacts below lowerFact ++ toFacts above upperFact
 noEdges :: Edges
 noEdges = Edges { above = S.empty, below = S.empty }
 
--- | An empty collection of facts about equality.
+-- | An empty collection of facts about order.
 empty :: Facts
 empty = LM M.empty
 
@@ -74,6 +75,14 @@ immAbove :: Facts -> Term -> S.Set Edge
 immAbove (LM m) t = case M.lookup t m of
                       Just edges -> above edges
                       Nothing    -> S.empty
+
+-- | The edges immediately below a node.
+immBelow :: Facts -> Term -> S.Set Edge
+immBelow (LM m) t = case M.lookup t m of
+                      Just edges -> below edges
+                      Nothing    -> S.empty
+
+
 
 
 -- | Check if there is an upward path from from the first node to the second.
@@ -99,6 +108,35 @@ reachable m smaller larger =
                    notDone = S.filter (not . (`S.member` vis) . target)
           in search vis (notDone new `S.union` notDone rest)
 
+findLowerBound :: Facts -> Term -> Integer
+findLowerBound facts = snd . search M.empty
+  where
+  search cache (Num x _) = (cache, x)
+  search cache t =
+    case M.lookup t cache of
+      Just b  -> (cache, b)
+      Nothing ->
+        let (cache1,bs) = mapAccumL search cache
+                        $ map target $ S.toList $ immBelow facts t
+            b = maximum (0:bs)
+        in (M.insert t b cache1, b)
+
+findUpperBound :: Facts -> Term -> Maybe Integer
+findUpperBound facts = snd . search M.empty
+  where
+  search cache (Num x _) = (cache, Just x)
+  search cache t =
+    case M.lookup t cache of
+      Just b  -> (cache, b)
+      Nothing ->
+        let (cache1,bs) = mapAccumL search cache
+                        $ map target $ S.toList $ immAbove facts t
+            b = foldr minMb Nothing bs
+        in (M.insert t b cache1, b)
+
+  minMb (Just x) (Just y) = Just (min x y)
+  minMb Nothing y         = y
+  minMb x _               = x
 
 
 
@@ -279,5 +317,8 @@ addFact ev t1 t2 m0 =
          Fact { factProof = byLeqAsym t1 t2 ev pOp
               , factProp  = Prop Eq [t1,t2]
               }
+
+
+
 
 
