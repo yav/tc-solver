@@ -915,9 +915,9 @@ Just x <- divide y 5
 
 > scDefs :: Prop -> [ (Var, Defn) ]
 > scDefs (Prop op [x1,x2,x3])
->   | Add <- op = opList "minus"        "minus"       "(+)"
->   | Mul <- op = opList "divide"       "divide"      "(*)"
->   | Exp <- op = opList "discreteRoot" "discreteLog" "(^)"
+>   | Add <- op = opList "minus"        "minus"    "(+)"
+>   | Mul <- op = opList "divide"       "divide"   "(*)"
+>   | Exp <- op = opList "discreteRoot" "logExact" "(^)"
 >   where
 >   opList l r o =
 >     [ (x, Def True  l x3 x2) | Var x@(NV _) <- [x1] ] ++
