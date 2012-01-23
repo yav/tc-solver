@@ -14,6 +14,7 @@ module TcTypeNatsLeq
   ) where
 
 import TcTypeNatsBase
+import TcTypeNatsEval
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Text.PrettyPrint(vcat)
@@ -108,35 +109,34 @@ reachable m smaller larger =
                    notDone = S.filter (not . (`S.member` vis) . target)
           in search vis (notDone new `S.union` notDone rest)
 
-findLowerBound :: Facts -> Term -> Integer
-findLowerBound facts = snd . search M.empty
+findLowerBound :: Facts -> Term -> (Integer, Proof)
+findLowerBound facts term0 = snd (search M.empty term0)
   where
-  search cache (Num x _) = (cache, x)
+  search cache t@(Num x _) = (cache, (x, byLeqRefl t))
   search cache t =
     case M.lookup t cache of
       Just b  -> (cache, b)
       Nothing ->
-        let (cache1,bs) = mapAccumL search cache
-                        $ map target $ S.toList $ immBelow facts t
-            b = maximum (0:bs)
+        let es          = S.toList (immBelow facts t)
+            (cache1,bs) = mapAccumL search cache (map target es)
+            jn (l,p1) e = (l, byLeqTrans (num l) (target e) t p1 (proof e))
+            b           = foldr pickBigger (0, byLeq0 t) (zipWith jn bs es)
         in (M.insert t b cache1, b)
 
-findUpperBound :: Facts -> Term -> Maybe Integer
+  pickBigger a@(x,_) b@(y,_) = if x > y then a else b
+
+findUpperBound :: Facts -> Term -> InfNat
 findUpperBound facts = snd . search M.empty
   where
-  search cache (Num x _) = (cache, Just x)
+  search cache (Num x _) = (cache, Nat x)
   search cache t =
     case M.lookup t cache of
       Just b  -> (cache, b)
       Nothing ->
         let (cache1,bs) = mapAccumL search cache
                         $ map target $ S.toList $ immAbove facts t
-            b = foldr minMb Nothing bs
+            b = minimum (Infinity : bs)
         in (M.insert t b cache1, b)
-
-  minMb (Just x) (Just y) = Just (min x y)
-  minMb Nothing y         = y
-  minMb x _               = x
 
 
 
