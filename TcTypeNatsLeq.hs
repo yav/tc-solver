@@ -320,5 +320,28 @@ addFact ev t1 t2 m0 =
 
 
 
+{-
 
+Interval forward:
+
+x + y = z          min x + min y <= z <= max x + max y
+x * y = z          min x * min y <= z <= max x * max y
+x ^ y = z          min x ^ min y <= z <= max x ^ max y
+
+Interval backward:
+
+x + y = z        max (0,min z - max y) <= x <= max z - min y
+x * y = z        ceil(min z / max y) <= x <= floor(max z / min y)
+  Note that we assume that dividing non-0 values by infinity (i.e.,
+    when there is no upper limit for `y`) gives a small yet non-0 value,
+    so `ceil` will round to 1.)
+
+    Example: min z = 5, max y = 3       -- 2 <= x
+    Example: min z = 5, max y = Nothing -- 1 <= x
+
+x ^ y = z    ceil (root (min z0) (max y)) x <= floor (root (max z0) (min y))
+             ceil (log  (min z0) (max x)) y <= floor (log  (max z0) (min x))
+
+
+-}
 

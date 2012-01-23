@@ -4,6 +4,8 @@ propositions using concrete natural numbers.
 
 module TcTypeNatsEval where
 
+import Data.Maybe(fromMaybe)
+
 -- | Subtract two natural numbers.
 minus :: Integer -> Integer -> Maybe Integer
 minus x y = if x >= y then Just (x - y) else Nothing
@@ -72,5 +74,61 @@ divide _ 0  = Nothing
 divide x y  = case divMod x y of
                 (a,0) -> Just a
                 _     -> Nothing
+
+
+--------------------------------------------------------------------------------
+
+
+-- The functions bellow are for interval analysis.
+
+-- | Natural numbers with a top infinity element. (No negative numbers!)
+data InfNat = Nat Integer | Infinity  deriving (Show,Eq,Ord)
+
+{- | Consider @x + y = z@.  This function computes a lower bound for @x@,
+using the upper bound for @y@ and the lower bound for @z@. -}
+subLower :: Integer -> InfNat -> Integer
+subLower _     Infinity    = 0
+subLower z_min (Nat max_y) = fromMaybe 0 (minus z_min max_y)
+
+{- | Consider @x + y = z@.  This function computes an upper bound for @x@,
+using the lower bound for @y@ and the upper bound for @z@. -}
+subUpper :: InfNat -> Integer -> InfNat
+subUpper Infinity _        = Infinity
+subUpper (Nat max_z) min_y = Nat (fromMaybe 0 (minus max_z min_y))
+
+{- | Consider @x * y = z@.  This function computes a lower bound for @x@,
+using the upper bound for @y@ and the lower bound for @z@. -}
+divLower :: Integer -> InfNat -> Integer
+divLower 0 _        = 0
+divLower _ Infinity = 1 -- if result is not 0, x must be at least 1
+divLower z_min (Nat y_max)
+  | y_max == 0 = 0   -- should have been improved.
+  | otherwise  = ceiling (fromInteger z_min / fromInteger y_max :: Rational)
+
+{- | Consider @x * y = z@.  This function computes an upper bound for @x@,
+using the lower bound for @y@ and the upper bound for @z@. -}
+divUpper :: InfNat -> Integer -> InfNat
+divUpper Infinity _ = Infinity
+divUpper (Nat z_max) y_min
+  | y_min == 0 = Infinity
+  | otherwise = Nat (floor (fromInteger z_max / fromInteger y_min :: Rational))
+
+
+
+{- | Consider @x ^ y = z@.  This function computes a lower bound for @y@,
+using the upper bound for @x@ and the lower bound for @z@.
+Example: logLower 5 (Nat 2) = 3, because y has to be at least 3,
+         if we want @2^y >= 5@.
+-}
+logLower :: Integer -> InfNat -> Integer
+logLower _ Infinity = 0
+logLower z_min (Nat x_max) = fromMaybe 0 (logRoundUp z_min x_max)
+
+{- | Consider @x ^ y = z@.  This function computes an upper bound for @y@,
+using the lower bound for @x@ and the upper bound for @z@.
+-}
+logUpper :: InfNat -> Integer -> InfNat
+logUpper Infinity _        = Infinity
+logUpper (Nat z_max) x_min = maybe Infinity Nat (logRoundDown z_max x_min)
 
 
