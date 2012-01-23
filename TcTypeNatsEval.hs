@@ -76,6 +76,7 @@ divide x y  = case divMod x y of
                 _     -> Nothing
 
 
+
 --------------------------------------------------------------------------------
 
 
@@ -103,7 +104,8 @@ divLower 0 _        = 0
 divLower _ Infinity = 1 -- if result is not 0, x must be at least 1
 divLower z_min (Nat y_max)
   | y_max == 0 = 0   -- should have been improved.
-  | otherwise  = ceiling (fromInteger z_min / fromInteger y_max :: Rational)
+  | otherwise  = case divMod z_min y_max of
+                   (q,r) -> if r == 0 then q else q + 1
 
 {- | Consider @x * y = z@.  This function computes an upper bound for @x@,
 using the lower bound for @y@ and the upper bound for @z@. -}
@@ -111,7 +113,7 @@ divUpper :: InfNat -> Integer -> InfNat
 divUpper Infinity _ = Infinity
 divUpper (Nat z_max) y_min
   | y_min == 0 = Infinity
-  | otherwise = Nat (floor (fromInteger z_max / fromInteger y_min :: Rational))
+  | otherwise  = Nat (div z_max y_min)
 
 
 
