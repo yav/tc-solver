@@ -335,6 +335,12 @@ x + y = z          min x + min y <= z <= max x + max y
 x * y = z          min x * min y <= z <= max x * max y
 x ^ y = z          min x ^ min y <= z <= max x ^ max y
 
+These follow from the monotonicity of the operators:
+
+  (min_x <= x, min_y <= y, min_x * min_y = k, x * y = z) => k <= z
+  etc.
+
+
 Interval backward:
 
 x + y = z        max (0,min z - max y) <= x <= max z - min y
@@ -348,6 +354,34 @@ x * y = z        ceil(min z / max y) <= x <= floor(max z / min y)
 
 x ^ y = z    ceil (root (min z0) (max y)) x <= floor (root (max z0) (min y))
              ceil (log  (min z0) (max x)) y <= floor (log  (max z0) (min x))
+
+
+have: x + y = z
+have: min_y <= y
+have: z <= max_z
+have: min_y + n = max_z
+need: x <= n
+
+min_y + t1 = y
+z     + t2 = max_z
+
+x + (min_y + t1 + t2) = max_z = min_y + n
+
+x + t1 + t2 = n
+hence: x <= n
+-------
+
+have: x * y = z
+have: min_y <= y              (min_y + t1 = y)
+have: z <= max_z              (z + t2 = max_z)
+have: min_y * n = max_z     // ignoring rounding down...
+need: x <= n
+
+x * (min_y + t1) + t2 = max_z = min_y * n
+x * min_y + x * t1 + t2 = min_y * n
+x + (x * t1 + t2) /min_y  = n
+
+XXX: Do these more directly.
 
 
 -}
