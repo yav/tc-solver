@@ -110,7 +110,7 @@ reachable m smaller larger =
           in search vis (notDone new `S.union` notDone rest)
 
 findLowerBound :: Facts -> Term -> (Integer, Proof)
-findLowerBound facts term0 = snd (search M.empty term0)
+findLowerBound facts = snd . search M.empty
   where
   search cache t@(Num x _) = (cache, (x, byLeqRefl t))
   search cache t =
@@ -119,24 +119,31 @@ findLowerBound facts term0 = snd (search M.empty term0)
       Nothing ->
         let es          = S.toList (immBelow facts t)
             (cache1,bs) = mapAccumL search cache (map target es)
-            jn (l,p1) e = (l, byLeqTrans (num l) (target e) t p1 (proof e))
+            jn (l,p) e  = (l, byLeqTrans (num l) (target e) t p (proof e))
             b           = foldr pickBigger (0, byLeq0 t) (zipWith jn bs es)
         in (M.insert t b cache1, b)
 
   pickBigger a@(x,_) b@(y,_) = if x > y then a else b
 
-findUpperBound :: Facts -> Term -> InfNat
+findUpperBound :: Facts -> Term -> Maybe (Proof, Integer)
 findUpperBound facts = snd . search M.empty
   where
-  search cache (Num x _) = (cache, Nat x)
+  search cache t@(Num x _) = (cache, Just (byLeqRefl t, x))
   search cache t =
     case M.lookup t cache of
       Just b  -> (cache, b)
       Nothing ->
-        let (cache1,bs) = mapAccumL search cache
-                        $ map target $ S.toList $ immAbove facts t
-            b = minimum (Infinity : bs)
+        let es          = S.toList (immAbove facts t)
+            (cache1,bs) = mapAccumL search cache (map target es)
+            jn e mb     = do (p,u) <- mb
+                             return (byLeqTrans t (target e) (num u)
+                                                                (proof e) p, u)
+            b           = foldr pickSmaller Nothing (zipWith jn es bs)
         in (M.insert t b cache1, b)
+
+  pickSmaller Nothing x = x
+  pickSmaller x Nothing = x
+  pickSmaller (Just a@(_,x)) (Just b@(_,y)) = Just (if x < y then a else b)
 
 
 
