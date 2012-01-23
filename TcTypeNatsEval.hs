@@ -10,18 +10,42 @@ import Data.Maybe(fromMaybe)
 minus :: Integer -> Integer -> Maybe Integer
 minus x y = if x >= y then Just (x - y) else Nothing
 
--- | Compute the exact root of two natural numbers.
+-- | Compute the the n-th root of a natural number, rounded down to
+-- the closest natural number.  The boolean indicates if the result
+-- is exact (i.e., True means no rounding was done, False means rounded down).
 -- The second argument specifies which root we are computing.
-discreteRoot :: Integer -> Integer -> Maybe Integer
-discreteRoot x0 root = search 0 x0
+genRoot :: Integer -> Integer -> Maybe (Integer, Bool)
+genRoot _  0    = Nothing
+genRoot x0 1    = Just (x0, True)
+genRoot x0 root = Just (search 0 (x0+1))
   where
   search from to = let x = from + div (to - from) 2
                        a = x ^ root
                    in case compare a x0 of
-                        EQ              -> Just x
+                        EQ              -> (x, True)
                         LT | x /= from  -> search x to
+                           | otherwise  -> (from, False)
                         GT | x /= to    -> search from x
-                        _               -> Nothing
+                           | otherwise  -> (from, False)
+
+-- | Compute the exact root of a natural number.
+-- The second argument specifies which root we are computing.
+rootExact :: Integer -> Integer -> Maybe Integer
+rootExact x y = do (z,True) <- genRoot x y
+                   return z
+
+-- | Compute the root of a natural number, rounded down to the closes natural.
+-- The second argument specifies which root we are computing.
+rootRoundDown :: Integer -> Integer -> Maybe Integer
+rootRoundDown x y = fst `fmap` genRoot x y
+
+-- | Compute the root of a natural number, rounded up to the closes natural.
+-- The second argument specifies which root we are computing.
+rootRoundUp :: Integer -> Integer -> Maybe Integer
+rootRoundUp x y = do (z,exact) <- genRoot x y
+                     return (if exact then z else z + 1)
+
+
 
 
 -- | Compute the logarithm of a number in the given base, rounded down to the
@@ -63,7 +87,7 @@ logRoundDown x y = fmap fst (genLog x y)
 -- | Compute the logarithm of a natural number, roundig up, if neccessary.
 logRoundUp :: Integer -> Integer -> Maybe Integer
 logRoundUp x y = do (z,exact) <- genLog x y
-                    if exact then return z else return (z + 1)
+                    return (if exact then z else z + 1)
 
 
 
@@ -132,5 +156,19 @@ using the lower bound for @x@ and the upper bound for @z@.
 logUpper :: InfNat -> Integer -> InfNat
 logUpper Infinity _        = Infinity
 logUpper (Nat z_max) x_min = maybe Infinity Nat (logRoundDown z_max x_min)
+
+{- | Consider @x ^ y = z@.  This function computes a lower bound for @x@,
+using the upper bound for @y@ and the lower bound for @z@.
+-}
+rootLower :: Integer -> InfNat -> Integer
+rootLower _ Infinity        = 0
+rootLower z_min (Nat x_max) = fromMaybe 0 (rootRoundUp z_min x_max)
+
+{- | Consider @x ^ y = z@.  This function computes an upper bound for @x@,
+using the lower bound for @y@ and the upper bound for @z@.
+-}
+rootUpper :: InfNat -> Integer -> InfNat
+rootUpper Infinity _        = Infinity
+rootUpper (Nat z_max) x_min = maybe Infinity Nat (rootRoundDown z_max x_min)
 
 
