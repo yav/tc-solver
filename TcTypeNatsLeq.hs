@@ -386,5 +386,36 @@ a <= c
 -------------------------- log_base_c mono
 a <= c
 
+
+Hm, do we really need the backward mono rules?
+Here are proofs of the (*) backward rules, just using (*) monotonicity.
+They do use the deiniftions of ceil&floor, as expected.
+
+goal: x * y = z   => ceil(min_z/max_y) <= x
+proof:
+  let n = ceil(min_z/max_y)
+  hence n is the smallest s.t., min_z <= n * max_y.
+  but min_z <= z = x * y <= x * max_y.
+  hence n <= x.
+
+goal: x * y = z => x <= floor(max_z/min_y)
+proof
+  let n = floor(max_z/min_y)
+  hence n is the largest s.t. n * min_y <= max_z
+  but x * min_y <= x * y = z <= max_z
+  hence x <= n.
+
+The central rule for the proofs:
+
+b <= x * a
+--------------
+ceil(b/a) <= x
+
+x * a <= b
+---------------
+x <= floor(b/a)
+
+These do resemble the div_by_c rule...
+
 -}
 
