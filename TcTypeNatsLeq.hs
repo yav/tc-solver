@@ -335,11 +335,6 @@ x + y = z          min x + min y <= z <= max x + max y
 x * y = z          min x * min y <= z <= max x * max y
 x ^ y = z          min x ^ min y <= z <= max x ^ max y
 
-These follow from the monotonicity of the operators:
-
-  (min_x <= x, min_y <= y, min_x * min_y = k, x * y = z) => k <= z
-  etc.
-
 
 Interval backward:
 
@@ -356,33 +351,40 @@ x ^ y = z    ceil (root (min z0) (max y)) x <= floor (root (max z0) (min y))
              ceil (log  (min z0) (max x)) y <= floor (log  (max z0) (min x))
 
 
-have: x + y = z
-have: min_y <= y
-have: z <= max_z
-have: min_y + n = max_z
-need: x <= n
+Justificatin of forward intreval:
 
-min_y + t1 = y
-z     + t2 = max_z
+a <= x, b <= y
+------------------ add mono
+(a + b) <= (x + y)
 
-x + (min_y + t1 + t2) = max_z = min_y + n
+a <= x, b <= y
+------------------ mul mono
+(a * b) <= (x * y)
 
-x + t1 + t2 = n
-hence: x <= n
--------
+a <= x, b <= y
+------------------ exp mono
+(a ^ b) <= (x ^ y)
 
-have: x * y = z
-have: min_y <= y              (min_y + t1 = y)
-have: z <= max_z              (z + t2 = max_z)
-have: min_y * n = max_z     // ignoring rounding down...
-need: x <= n
 
-x * (min_y + t1) + t2 = max_z = min_y * n
-x * min_y + x * t1 + t2 = min_y * n
-x + (x * t1 + t2) /min_y  = n
 
-XXX: Do these more directly.
 
+Justificatin of backward intreval:
+
+(a + c) <= (b + c)
+------------------  sub_c mono
+a <= b
+
+(a * c) <= (b * c), 1 <= c
+--------------------------  div_by_c mono
+a <= b
+
+(a ^ c) <= (b <= c), 1 <= c
+--------------------------- root_cth mono
+a <= c
+
+(c ^ a) <= (c ^ b), 2 <= c
+-------------------------- log_base_c mono
+a <= c
 
 -}
 
