@@ -22,6 +22,7 @@ module TcTypeNatsBase
   , byLeqTrans
   , byLeqAsym
   , byLeq0
+  , byMono
   , byCong
   , proofLet
   , PP(..)
@@ -130,6 +131,12 @@ data Theorem  = EqRefl      -- forall a.                        a = a
               | DefExp Integer Integer Integer
               | DefLeq Integer Integer
 
+              -- Only for Add,Mul,and Exp
+              | Mono Pred  -- forall as xs. (as <= xs) => F as <= F xs
+                           {- forall a b c x y z. ( a <= x, b <= y
+                                                  , a OP b = c, x OP y = z
+                                                  ) => c <= z -}
+
               | AddLeq
               | MulLeq
               | ExpLeq1
@@ -185,6 +192,11 @@ byLeqAsym t1 t2 p1 p2 = Using LeqAsym [t1,t2] [p1,p2]
 
 byLeq0 :: Term -> Proof
 byLeq0 t = Using Leq0 [t] []
+
+byMono :: Pred -> [Term] -> [Proof] -> Proof
+byMono p ts@[_,_,_,_,_,_] ps@[_,_,_,_]
+  | p `elem` [Add,Mul,Exp]  = Using (Mono p) ts ps
+byMono _ _ _ = error "byMono: Incorrect argumnets"
 
 
 -- (x1 = y1, x2 = y2, P x1 x2) => P y1 y2

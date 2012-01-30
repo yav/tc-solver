@@ -20,6 +20,7 @@ import qualified Data.Set as S
 import Text.PrettyPrint(vcat)
 import Control.Monad(guard)
 import Data.List(mapAccumL)
+import Data.Maybe(maybeToList)
 
 -- | A collection of facts about the ordering of terms.
 newtype Facts = LM (M.Map Term Edges)
@@ -325,6 +326,133 @@ addFact ev t1 t2 m0 =
               , factProp  = Prop Eq [t1,t2]
               }
 
+{- Monotonicity of the operators:
+
+a <= x, b <= y
+------------------ add mono
+(a + b) <= (x + y)
+
+a <= x, b <= y
+------------------ mul mono
+(a * b) <= (x * y)
+
+a <= x, b <= y
+------------------ exp mono
+(a ^ b) <= (x ^ y)
+
+-}
+
+-- p : a + b = c
+monoAddForward1 :: Proof -> Term -> Term -> Term -> Facts -> [Fact]
+monoAddForward1 p a b c facts =
+  [ Fact { factProp  = Prop Leq [a,c]
+         , factProof = byMono Add [a,num 0,a,a,b,c]
+                                  [byLeqRefl a, byLeq0 b, add0R a, p ]
+         }
+
+  , Fact { factProp  = Prop Leq [b,c]
+         , factProof = byMono Add [num 0,b,b,a,b,c]
+                                  [byLeq0 a, byRefl b, add0L a, p ]
+         }
+  , let (min_a, ma) = findLowerBound facts a
+        (min_b, mb) = findLowerBound facts b
+        ab          = min_a + min_b
+    in Fact { factProp  = Prop Leq [num ab,c]
+            , factProof = byMono Add [num min_a, num min_b, num ab, a, b, c]
+                                     [ma,mb,defAdd min_a min_b ab,p]
+            }
+  ] ++
+  [ Fact { factProp  = Prop Leq [c,num ab]
+         , factProof = byMono Add [a,b,c,num max_a,num max_b, num ab]
+                                  [ma,mb,p,defAdd max_a max_b ab]
+         }
+         | (ma,max_a) <- maybeToList (findUpperBound facts a)
+         , (mb,max_b) <- maybeToList (findUpperBound facts b)
+         , let ab = max_a + max_b
+  ]
+
+  where add0R t = Using Add0 [t] []
+        add0L t = Using AddComm [t,num 0,t] [add0R t]
+        defAdd x y z = Using (DefAdd x y z) [] []
+
+
+
+-- p : a * b = c
+monoMulForward1 :: Proof -> Term -> Term -> Term -> Facts -> [Fact]
+monoMulForward1 p a b c facts =
+  [ Fact { factProp  = Prop Leq [a,c]
+         , factProof = byMono Mul [a,num 1,a,a,b,c]
+                                  [byLeqRefl a, b1, mul1R a, p ]
+         }
+         | b1 <- maybeToList (prove facts (num 1) b)
+  ] ++
+  [ Fact { factProp  = Prop Leq [b,c]
+         , factProof = byMono Mul [num 1,b,b,a,b,c]
+                                  [a1, byRefl b, mul1L a, p ]
+         }
+         | a1 <- maybeToList (prove facts (num 1) a)
+  ] ++
+  [ let (min_a, ma) = findLowerBound facts a
+        (min_b, mb) = findLowerBound facts b
+        ab          = min_a * min_b
+    in Fact { factProp  = Prop Leq [num ab,c]
+            , factProof = byMono Mul [num min_a, num min_b, num ab, a, b, c]
+                                     [ma,mb,defMul min_a min_b ab,p]
+            }
+  ] ++
+  [ Fact { factProp  = Prop Leq [c,num ab]
+         , factProof = byMono Mul [a,b,c,num max_a,num max_b, num ab]
+                                  [ma,mb,p,defMul max_a max_b ab]
+         }
+         | (ma,max_a) <- maybeToList (findUpperBound facts a)
+         , (mb,max_b) <- maybeToList (findUpperBound facts b)
+         , let ab = max_a * max_b
+  ]
+
+  where mul1R t = Using Mul1 [t] []
+        mul1L t = Using MulComm [t,num 1,t] [mul1R t]
+        defMul x y z = Using (DefMul x y z) [] []
+
+
+
+-- p : a ^ b = c
+monoExpForward1 :: Proof -> Term -> Term -> Term -> Facts -> [Fact]
+monoExpForward1 p a b c facts =
+  [ Fact { factProp  = Prop Leq [a,c]
+         , factProof = byMono Exp [a,num 1,a,a,b,c]
+                                  [byLeqRefl a, b1, exp1R a, p ]
+         }
+         | b1 <- maybeToList (prove facts (num 1) b)
+  ] ++
+{- We could compose with x <= 2^x...?
+  [ Fact { factProp  = Prop Leq [2^b,c]
+         , factProof = byMono Exp [num 2,b,2^b,a,b,c]
+                                  [a1, byRefl b, defn, p ]
+         }
+         | a1 <- maybeToList (prove facts (num 2) a)
+  ] ++ -}
+
+  [ let (min_a, ma) = findLowerBound facts a
+        (min_b, mb) = findLowerBound facts b
+        ab          = min_a ^ min_b
+    in Fact { factProp  = Prop Leq [num ab,c]
+            , factProof = byMono Exp [num min_a, num min_b, num ab, a, b, c]
+                                     [ma,mb,defExp min_a min_b ab,p]
+            }
+  ] ++
+  [ Fact { factProp  = Prop Leq [c,num ab]
+         , factProof = byMono Exp [a,b,c,num max_a,num max_b, num ab]
+                                  [ma,mb,p,defExp max_a max_b ab]
+         }
+         | (ma,max_a) <- maybeToList (findUpperBound facts a)
+         , (mb,max_b) <- maybeToList (findUpperBound facts b)
+         , let ab = max_a ^ max_b
+  ]
+
+  where exp1R t = Using Root1 [t] []    -- a ^ 1 = a
+        defExp x y z = Using (DefExp x y z) [] []
+
+
 
 
 {-
@@ -353,19 +481,12 @@ x ^ y = z    ceil (root (min z0) (max y)) x <= floor (root (max z0) (min y))
 
 Justificatin of forward intreval:
 
-a <= x, b <= y
------------------- add mono
-(a + b) <= (x + y)
 
-a <= x, b <= y
------------------- mul mono
-(a * b) <= (x * y)
-
-a <= x, b <= y
------------------- exp mono
-(a ^ b) <= (x ^ y)
-
-
+These also justify the current ordering rules:
+  (x + y = z, x <= x, 0 <= y) => x <= z     (by add mono)
+  (x * y = z, x <= x, 1 <= y) => x <= z     (by mul mono)
+  (x ^ y = z, x <= x, 1 <= y) => x <= z     (by exp mono)
+  (x ^ y = z, 2 <= x, y <= y) => (2^y) <= z
 
 
 Justificatin of backward intreval:
