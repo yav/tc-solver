@@ -12,10 +12,10 @@ Here, insantiated to the function and predicate symbols of the theory:
     mul_fun   :: forall a b c1 c2. (a * b ~ c1, a * b ~ c2) => (c1 ~ c2)
     exp_fun   :: forall a b c1 c2. (a ^ b ~ c1, a ^ b ~ c2) => (c1 ~ c2)
     
-    add_cong  :: forall a b c x y z. (a ~ x, b ~ y)         => (a + b ~ x + y)
-    mul_cong  :: forall a b c x y z. (a ~ x, b ~ y)         => (a * b ~ x * y)
-    exp_cong  :: forall a b c x y z. (a ~ x, b ~ y)         => (a ^ b ~ x ^ y)
-    leq_cong  :: forall a b x y.     (a ~ x, b ~ y, a <= b) => (x <= y)
+    add_cong  :: forall a b x y. (a ~ x, b ~ y)         => (a + b ~ x + y)
+    mul_cong  :: forall a b x y. (a ~ x, b ~ y)         => (a * b ~ x * y)
+    exp_cong  :: forall a b x y. (a ~ x, b ~ y)         => (a ^ b ~ x ^ y)
+    leq_cong  :: forall a b x y. (a ~ x, b ~ y, a <= b) => (x <= y)
 
 
 Definitions on literals (`a` and `b` are concrete literals):
