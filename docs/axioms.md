@@ -21,8 +21,8 @@ Here, insantiated to the function and predicate symbols of the theory:
 Definitions on literals (`a` and `b` are concrete literals):
 
     add_def a b   :: a + b ~ $(a + b)
-    mul_def a b   :: a * b ~ $(a * c)
-    exp_def a b   :: a ^ b ~ $(a ^ c)
+    mul_def a b   :: a * b ~ $(a * b)
+    exp_def a b   :: a ^ b ~ $(a ^ b)
     leq_def a b   :: $(a <= b) => (a <= b)
 
 Units:
