@@ -1,7 +1,8 @@
 
 .PHONY: default clean
 
-default: note.html note.pdf evidence.pdf evidence.html axioms.pdf axioms.html
+default: note.html note.pdf evidence.pdf evidence.html axioms.pdf axioms.html \
+         eval.html eval.pdf
 
 
 BUILD=build
