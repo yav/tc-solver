@@ -40,7 +40,7 @@ Anihilators:
 Commutativity:
 
     add_comm      :: forall a b. a + b ~ b + a
-    mul_comm      :: forall a b. a + b ~ b + a
+    mul_comm      :: forall a b. a * b ~ b * a
 
 Associativity:
 
@@ -50,7 +50,7 @@ Associativity:
 
 Distributivity:
 
-    add_mul_distr :: forall a b c. (b + c) * c ~ (a * b) + (a * c)
+    add_mul_distr :: forall a b c. (a + b) * c ~ (a * c) + (b * c)
     mul_exp_distr :: forall a b c. (a * b) ^ c ~ (a ^ c) * (b ^ c)
 
 
