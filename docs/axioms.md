@@ -1,3 +1,6 @@
+These are the axioms in non-canonicalized form.
+
+
 General properties of equality:
 
     eq_refl   :: forall a.                       (a ~ a)
@@ -24,6 +27,7 @@ Definitions on literals (`a` and `b` are concrete literals):
     mul_def a b   :: a * b ~ $(a * b)
     exp_def a b   :: a ^ b ~ $(a ^ b)
     leq_def a b   :: $(a <= b) => (a <= b)
+
 
 Units:
 
@@ -85,4 +89,26 @@ Cancellation and order:
     leq_mul_cancel_L :: forall a b1 b2. (1 <= a, a * b1 <= a * b2) => (b1 <= b2)
     leq_exp_cancel_L :: forall a b1 b2. (2 <= a, a ^ b1 <= a ^ b2) => (b1 <= b2)
     leq_exp_cancel_R :: forall a1 a2 b. (1 <= b, a1 ^ b <= a2 ^ b) => (a1 <= a2)
+
+
+Perhaps...
+----------
+
+Totality.  These do not fit with the standard evidence structure because
+of the existential.  They are useful for naming terms (i.e., the existential
+is always eliminated by introducing a fresh variable).
+
+    -- conceptual
+    add_tot       :: forall a b. exists c. a + b ~ c
+    mul_tot       :: forall a b. exists c. a * b ~ c
+    exp_tot       :: forall a b. exists c. a ^ b ~ c
+
+    -- To make things fit, where `c` should start off as a fresh variable.
+    add_tot a b c :: a + b ~ c
+    mul_tot a b c :: a * b ~ c
+    exp_tot a b c :: a ^ b ~ c
+
+iMaybe this sould be done with some sort of `let` construct.
+
+
 
