@@ -33,8 +33,8 @@ import Text.PrettyPrint
 {- | A collection of facts. The collection should satisfy the invariant that
 equality facts are always reflected in the other facts of the collection. -}
 data Facts = Facts { facts    :: Props Fact -- ^ Excluding equality and order
-                   , factsEq  :: Subst            -- ^ Normalized equalities
-                   , factsLeq :: Leq.Facts        -- ^ Normalized order
+                   , factsEq  :: Subst      -- ^ Normalized equalities
+                   , factsLeq :: Leq.Facts  -- ^ Normalized order
                    }
 
 -- | Only the equality facts of the collection.

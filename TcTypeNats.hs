@@ -41,7 +41,7 @@ instance PP Inerts where
 
 -- | The result of trying to insert a new goal or fact to an inert set.
 data InsertInert = InsertInert
-  { solvedGoals :: [(EvVar,Proof)]    -- ^ Goals that were proved.
+  { solvedGoals  :: [(EvVar,Proof)]   -- ^ Goals that were proved.
   , newGoals     :: [Goal]            -- ^ New goals that need proof.
   , newFacts     :: Props Fact        -- ^ New facts that need proof.
   , newInerts    :: Inerts            -- ^ The new inert set.
@@ -49,10 +49,10 @@ data InsertInert = InsertInert
 
 noChanges :: Inerts -> InsertInert
 noChanges is = InsertInert { solvedGoals = []
-                          , newGoals     = []
-                          , newFacts     = Props.empty
-                          , newInerts    = is
-                          }
+                           , newGoals     = []
+                           , newFacts     = Props.empty
+                           , newInerts    = is
+                           }
 
 
 -- Facts -----------------------------------------------------------------------
@@ -70,7 +70,7 @@ insertFact g props =
     Improved fact -> return (noChanges props)
                             { newFacts = Props.singleton fact }
     Added new newProps -> return
-      InsertInert { newGoals    = Props.toList (goals props)
+      InsertInert { newGoals     = Props.toList (goals props)
                   , newFacts     = new
                   , solvedGoals  = []
                   , newInerts    = Inerts { facts  = newProps

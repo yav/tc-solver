@@ -40,7 +40,8 @@ newtype Var = V Xi
 {- The 'Xi' in the 'Num' constructor stores the original 'Xi' type that
 gave rise to the number. It is there in an attempt to preserve type synonyms. -}
 
-{- The ordering model below makes assumption about ther ordering on terms:
+{- The ordering model (TcTypeNatsLeq) makes assumptions about the
+   ordering on terms:
   - Variables should come before numbers.  This is useful because we can
     use "fst (split 0)" to get just the variable part of the map.
   - Number-terms should be ordered as their corresponding numbers.  This is
