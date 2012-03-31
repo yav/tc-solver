@@ -77,6 +77,8 @@ General properties of order:
     leq_trans     :: forall a b c. (a <= b, b <= c) => (a <= c)
     leq_antisym   :: forall a b.   (a <= b, b <= a) => (a ~ b)
 
+    leq0          :: forall a. 0 <= a
+
 Monotonicity (congruence with respect to order):
 
     add_mono      :: forall a b x y. (a <= x, b <= y) => (a + b <= x + y)
