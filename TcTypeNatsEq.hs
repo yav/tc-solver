@@ -65,7 +65,7 @@ apply (Subst m) (Var x)
   | Just res <- M.lookup x m  = res
 apply _ t                     = (byRefl t, t)
 
-{- NOTE: Here we work iwth very simple proofs.  For more complex terms,
+{- NOTE: Here we work with very simple proofs.  For more complex terms,
 the proofs would also need to use congruence.
 -}
 

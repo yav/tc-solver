@@ -105,8 +105,8 @@ data AddFact
   | AlreadyKnown
   -- ^ The fact was not added because it was already known.
 
-  | Improved Fact
-  -- ^ The fact was not added because we found a better equivalent fact.
+  | Improved [Fact]
+  -- ^ The fact was not added because we found a better set of equivalent facts.
 
   | Added (Props Fact) Facts
   {- ^ The fact was added.  The first field contains additional facts that
@@ -154,7 +154,7 @@ addLeqFact :: Proof -> Term -> Term -> Facts -> AddFact
 addLeqFact ev t1 t2 fs =
   case Leq.addFact ev t1 t2 (factsLeq fs) of
     Leq.AlreadyKnown -> AlreadyKnown
-    Leq.Improved f   -> Improved f
+    Leq.Improved f   -> Improved [f]
     Leq.Added ls     -> Added (facts fs) fs { factsLeq = ls
                                             , facts = Props.empty
                                             }

@@ -150,11 +150,16 @@ data Theorem  = EqRefl      -- forall a.                        a = a
               | AddAssocSym | MulAssocSym | AddMulSym
               | MulExpSym | ExpAddSym | ExpMulSym
               | FunAdd | FunMul | FunExp
+
+              | Sorry
                 deriving Show
 
 
 data Proof    = ByAsmp EvVar
               | Using Theorem [Term] [Proof]   -- Instantiation, sub-proofs
+
+bySorry :: Proof
+bySorry = Using Sorry [] []
 
 byRefl :: Term -> Proof
 byRefl t = Using EqRefl [t] []

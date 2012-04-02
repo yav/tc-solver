@@ -20,6 +20,7 @@ import qualified TcTypeNatsLeq    as Leq
 import           TcTypeNatsFacts  as Facts
 import           TcTypeNatsRules
 import           TcTypeNatsEval
+import qualified TcTypeNatsNorm   as Norm
 
 import Debug.Trace
 import Text.PrettyPrint
@@ -67,8 +68,8 @@ insertFact g props =
   case addFact g (facts props) of
     Inconsistent  -> mzero
     AlreadyKnown  -> return (noChanges props)
-    Improved fact -> return (noChanges props)
-                            { newFacts = Props.singleton fact }
+    Improved fs   -> return (noChanges props)
+                            { newFacts = Props.fromList fs }
     Added new newProps -> return
       InsertInert { newGoals     = Props.toList (goals props)
                   , newFacts     = new
@@ -92,11 +93,20 @@ new work.
 addFact :: Fact -> Facts -> AddFact
 addFact f fs =
   case improveFact (getEqFacts fs) f of
-    Just f1 -> Improved f1
+    Just f1 -> Improved [f1]
     Nothing ->
       case factProp f of
         Prop Eq  [s,t] -> addEqFact  (factProof f) s t fs
         Prop Leq [s,t] -> addLeqFact (factProof f) s t fs
+
+{-
+        _ | Norm.Impossible  <- res -> Inconsistent
+          | Norm.Improved fs <- res -> Improved $ map (Fact bySorry) fs
+          | Norm.OK f        <- res -> 
+          where res = Norm.fromProp (factProp f)
+-}
+
+
         _ | impossible (factProp f) -> Inconsistent
         _ ->
           case solve (getOtherFacts fs) (factProp f) of
@@ -136,8 +146,8 @@ addFactTrans facts0  fact =
   case addFact fact facts0 of
     Inconsistent    -> mzero
     AlreadyKnown    -> return facts0
-    Improved fact1  -> addFactTrans  facts0 fact1
-    Added fs facts1 -> addFactsTrans' facts1 fs
+    Improved fs     -> addFactsTrans' facts0 fs
+    Added fs facts1 -> addFactsTrans  facts1 fs
 
 
 {- Add a collection of facts and all the facts that follow from them.
@@ -146,15 +156,14 @@ in turn, would enable the discovery of additional facts.
 Furthermore, improvements "restart" so we do less work if we do equalities
 first. -}
 
-addFactsTrans' :: Facts -> Props Fact -> Maybe Facts
-addFactsTrans' fs = foldM addFactTrans fs . Props.toList
+addFactsTrans' :: Facts -> [Fact] -> Maybe Facts
+addFactsTrans' fs = foldM addFactTrans fs
 
 addFactsTrans :: Facts -> Props Fact -> Maybe Facts
 addFactsTrans fs facts0 =
-  trace "Transitive facts" $
-  case addFactsTrans' fs facts0 of
-    Nothing -> trace "(nothing)" Nothing
-    Just x  -> trace (show (pp x)) $ Just x
+  case addFactsTrans' fs (Props.toList facts0) of
+    Nothing -> Nothing
+    Just x  -> Just x
 
 
 
