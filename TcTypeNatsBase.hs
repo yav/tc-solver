@@ -124,9 +124,9 @@ data Theorem  = EqRefl      -- forall a.                        a = a
               | LeqTrans    -- forall a b c. (a <= b, b <= c) => a <= c
               | Leq0        -- forall a.                         0 <= a
 
-              | DefAdd Integer Integer Integer
-              | DefMul Integer Integer Integer
-              | DefExp Integer Integer Integer
+              | DefAdd Integer Integer
+              | DefMul Integer Integer
+              | DefExp Integer Integer
               | DefLeq Integer Integer
 
               -- Only for Add,Mul,and Exp
@@ -139,7 +139,22 @@ data Theorem  = EqRefl      -- forall a.                        a = a
               | MulLeq
               | ExpLeq1
               | ExpLeq2
-              | Add0 | Mul0 | Mul1 | Root0 | Root1 | Log1
+
+              | Add0_R    -- forall a. a + 0 = a
+              | Add0_L    -- forall a. 0 + a = a
+
+
+              | Mul0_R    -- forall a. a * 0 = 0
+              | Mul0_L    -- forall a. 0 * a = 0
+
+              | Mul1_R    -- forall a. a * 1 = a
+              | Mul1_L    -- forall a. 1 * a = a
+
+              | Root0     -- forall a. a ^ 0 = 1
+              | Root1     -- forall a. a ^ 1 = a
+              | Log1      -- forall a. 1 ^ a = 1
+
+
               | AddComm | MulComm
               | SubL | SubR | DivL | DivR | Root | Log
               | MulGrowL | MulGrowR | ExpGrow
@@ -229,6 +244,7 @@ proofLet x p1 (Using EqSym [t1,t2] [s1]) =
 proofLet x p1 (Using (Cong p) ts ss) = byCong p ts (init ss1) (last ss1)
   where ss1 = map (proofLet x p1) ss
 proofLet x p1 (Using t ts ps) = Using t ts (map (proofLet x p1) ps)
+
 
 --------------------------------------------------------------------------------
 

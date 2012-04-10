@@ -20,7 +20,6 @@ import qualified TcTypeNatsLeq    as Leq
 import           TcTypeNatsFacts  as Facts
 import           TcTypeNatsRules
 import           TcTypeNatsEval
-import qualified TcTypeNatsNorm   as Norm
 
 import Debug.Trace
 import Text.PrettyPrint
@@ -372,11 +371,31 @@ impGoal su p
 --------------------------------------------------------------------------------
 
 solve :: Props Fact -> Prop -> Maybe Proof
-solve _ (Prop Eq [x,y]) | x == y = Just (byRefl x)
-solve ps p = solve0 [] p `mplus` byAsmp ps p
+solve _ (Prop Eq [x,y])  | x == y           = Just (byRefl x)
 
-byAsmp :: Props Fact -> Prop -> Maybe Proof
-byAsmp ps p =
+solve _ (Prop Leq [x,y]) | x == y           = Just (byLeqRefl x)
+solve _ (Prop Leq [Num 0,y])                = Just (byLeq0 y)
+solve _ (Prop Leq [Num x, Num y]) | x <= y  = Just (byLeqDef x y)
+
+solve _ (Prop Add [Num 0, y, z]) | y == z   = Just (Using Add0_L [z] [])
+solve _ (Prop Add [x, Num 0, z]) | x == z   = Just (Using Add0_R [z] [])
+solve _ (Prop Add [Num x, Num y, Num z])
+  | x + y == z                              = Just $ Using (DefAdd x y) [] []
+
+solve _ (Prop Mul [Num 0, y, Num 0])        = Just (Using Mul0_L [y] [])
+solve _ (Prop Mul [x, Num 0, Num 0])        = Just (Using Mul0_R [x] [])
+solve _ (Prop Mul [Num 1, y, z]) | y == z   = Just (Using Mul1_L [z] [])
+solve _ (Prop Mul [x, Num 1, z]) | x == z   = Just (Using Mul1_R [z] [])
+solve _ (Prop Mul [Num x, Num y, Num z])
+  | x * y == z                              = Just $ Using (DefMul x y) [] []
+
+solve _ (Prop Exp [x, Num 0, Num 1])        = Just (Using Root0 [x] [])
+solve _ (Prop Exp [x, Num 1, z]) | x == z   = Just (Using Root1 [z] [])
+solve _ (Prop Exp [Num 1, x, Num 1])        = Just (Using Log1  [x] [])
+solve _ (Prop Exp [Num x, Num y, Num z])
+  | x ^ y == z                              = Just $ Using (DefExp x y) [] []
+
+solve ps p =
   do q <- find (\x -> propArgs x == propArgs p) $ getPropsFor (propPred p) ps
      return (factProof q)
 

@@ -14,7 +14,6 @@ module TcTypeNatsLeq
   ) where
 
 import TcTypeNatsBase
-import TcTypeNatsEval
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Text.PrettyPrint(vcat)
@@ -359,21 +358,21 @@ monoAddForward1 p a b c facts =
         ab          = min_a + min_b
     in Fact { factProp  = Prop Leq [num ab,c]
             , factProof = byMono Add [num min_a, num min_b, num ab, a, b, c]
-                                     [ma,mb,defAdd min_a min_b ab,p]
+                                     [ma,mb,defAdd min_a min_b,p]
             }
   ] ++
   [ Fact { factProp  = Prop Leq [c,num ab]
          , factProof = byMono Add [a,b,c,num max_a,num max_b, num ab]
-                                  [ma,mb,p,defAdd max_a max_b ab]
+                                  [ma,mb,p,defAdd max_a max_b]
          }
          | (ma,max_a) <- maybeToList (findUpperBound facts a)
          , (mb,max_b) <- maybeToList (findUpperBound facts b)
          , let ab = max_a + max_b
   ]
 
-  where add0R t = Using Add0 [t] []
-        add0L t = Using AddComm [t,num 0,t] [add0R t]
-        defAdd x y z = Using (DefAdd x y z) [] []
+  where add0R t = Using Add0_R [t] []
+        add0L t = Using Add0_L [t] []
+        defAdd x y = Using (DefAdd x y) [] []
 
 
 
@@ -397,21 +396,21 @@ monoMulForward1 p a b c facts =
         ab          = min_a * min_b
     in Fact { factProp  = Prop Leq [num ab,c]
             , factProof = byMono Mul [num min_a, num min_b, num ab, a, b, c]
-                                     [ma,mb,defMul min_a min_b ab,p]
+                                     [ma,mb,defMul min_a min_b,p]
             }
   ] ++
   [ Fact { factProp  = Prop Leq [c,num ab]
          , factProof = byMono Mul [a,b,c,num max_a,num max_b, num ab]
-                                  [ma,mb,p,defMul max_a max_b ab]
+                                  [ma,mb,p,defMul max_a max_b]
          }
          | (ma,max_a) <- maybeToList (findUpperBound facts a)
          , (mb,max_b) <- maybeToList (findUpperBound facts b)
          , let ab = max_a * max_b
   ]
 
-  where mul1R t = Using Mul1 [t] []
-        mul1L t = Using MulComm [t,num 1,t] [mul1R t]
-        defMul x y z = Using (DefMul x y z) [] []
+  where mul1R t = Using Mul1_R [t] []
+        mul1L t = Using Mul1_L [t] []
+        defMul x y = Using (DefMul x y) [] []
 
 
 
@@ -437,20 +436,20 @@ monoExpForward1 p a b c facts =
         ab          = min_a ^ min_b
     in Fact { factProp  = Prop Leq [num ab,c]
             , factProof = byMono Exp [num min_a, num min_b, num ab, a, b, c]
-                                     [ma,mb,defExp min_a min_b ab,p]
+                                     [ma,mb,defExp min_a min_b,p]
             }
   ] ++
   [ Fact { factProp  = Prop Leq [c,num ab]
          , factProof = byMono Exp [a,b,c,num max_a,num max_b, num ab]
-                                  [ma,mb,p,defExp max_a max_b ab]
+                                  [ma,mb,p,defExp max_a max_b]
          }
          | (ma,max_a) <- maybeToList (findUpperBound facts a)
          , (mb,max_b) <- maybeToList (findUpperBound facts b)
          , let ab = max_a ^ max_b
   ]
 
-  where exp1R t = Using Root1 [t] []    -- a ^ 1 = a
-        defExp x y z = Using (DefExp x y z) [] []
+  where exp1R t    = Using Root1 [t] []    -- a ^ 1 = a
+        defExp x y = Using (DefExp x y) [] []
 
 
 

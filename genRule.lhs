@@ -90,7 +90,7 @@ Rules
 >   (sides,asmps')  = partition isSide as
 >   asmps           = nub asmps'
 >   vars            = map Var $ nub $ filter (not . numV) $ fvs (asmps,r)
->   thm             = Thm name (if isAx then pArgs r else [])
+>   thm             = Thm name (if isAx then take 2 (pArgs r) else [])
 
 
 Keeping Track of Proofs
@@ -167,9 +167,9 @@ with one of the fixed rules that we already know.
 >
 >   toProof (Prop op ps) =
 >     By (case op of
->           Add -> Thm "DefAdd" ps
->           Mul -> Thm "DefMul" ps
->           Exp -> Thm "DefExp" ps
+>           Add -> Thm "DefAdd" $ take 2 ps
+>           Mul -> Thm "DefMul" $ take 2 ps
+>           Exp -> Thm "DefExp" $ take 2 ps
 >           Leq -> Thm "DefLeq" ps
 >           Eq  -> error "Eq Asmp (this could be done by ref)"
 >        ) [] []
@@ -243,9 +243,9 @@ Definition schemas for basic functions and relations
 
 > simpleRules :: [Rule]
 > simpleRules = commuteConcs $ map toSimpleRule $
->   [ rule "Add0"    (x  +  0  === x)
->   , rule "Mul0"    (x  *  0  === 0)
->   , rule "Mul1"    (x  *  1  === x)
+>   [ rule "Add0_R"  (x  +  0  === x)
+>   , rule "Mul0_R"  (x  *  0  === 0)
+>   , rule "Mul1_R"  (x  *  1  === x)
 >   , rule "Root0"   (x ^^^ 0  === 1)
 >   , rule "Root1"   (x ^^^ 1  === x)
 >   , rule "Log1"    (1 ^^^ x  === 1)
@@ -946,17 +946,6 @@ They combine the existing assumptions with the new fact to derive more facts.
 >   }
 
 
-"Backward" rules are used to solve a goal, from a set of assumptions.
-
-> data BRule = BRule
->   { bPats     :: [ Prop ]   -- Existing assumptions, XXX: broken when not []
->   , bGuards   :: [ Guard ]  -- Side conditions
->   , bBoringGs :: [ Guard ]  -- Uninteresting equality side conditions
->   , bProof    :: Proof      -- Proof for the new fact
->   , bNew      :: Prop       -- Fact that can be solved
->   , bNotes    :: Doc
->   }
-
 "Guards" or side-conditions restrict when a set of equations are suitable for
 something.  They differ from other equations in that we don't need to match
 them against existing assumptions, because they do not contain unbaound
@@ -996,13 +985,6 @@ variables.
 >     where nl (x,p) = do p1 <- nonLin p
 >                         return (x,p1)
 >
-> instance NonLin BRule where
->   nonLin r =
->     do ps <- nonLin (bPats r)
->        a  <- nonLin (bNew r)
->        unless (null $ intersect (fvs ps) (fvs a)) $ error "non-lin bug"
->        return r { bPats = ps, bNew = a }
-
 
 We know that while type checking we never have assumptions
 with two constants in the environemnt, because those would have
@@ -1099,38 +1081,12 @@ be defined in terms of variables in "R" and "r".
 >   where notLeq (_,Prop x _) = x /= Leq
 
 
-Convert a rule into one suitable for backward reasoning (i.e., solving things).
-
-> toBRule :: Rule -> [BRule]
-> toBRule (Rule { rConc = Prop Eq _ }) = []  -- we relay on frules to fire
-> toBRule r =
->   do let y      = rConc r
->          guards = rSides r
->          pats   = rAsmps r
-
->      hsGuards <-
->        case resolveGuards (fvs (y,pats)) [] guards of
->          Nothing -> trace ("BRule: failed to resolve guards for: "
->                                                           ++ show r) mzero
->          Just t -> return t
->
->      return BRule { bPats   = pats, bNew = y
->                   , bGuards = hsGuards, bBoringGs =[]
->                   , bProof  = rProof r
->                   , bNotes  = ppLongRule r
->                   }
-
-
-> solverRules :: ([FRule], [BRule])
-> solverRules = ( filter (not . useless) $ concat (map mkFRule onlyFRules)
->               , concat (map mkBRule onlyBRules)
->               )
+> solverRules :: [FRule]
+> solverRules = filter (not . useless) $ concat (map mkFRule onlyFRules)
 >   where
 >   mkFRule = map (rmNonLin forFRule) . toFRule
->   mkBRule = map (rmNonLin forBRule) . toBRule
 >
 >   forFRule f es = f { fBoringGs = map GBool es }
->   forBRule f es = f { bBoringGs = map GBool es }
 >
 >   useless = any obvious . map snd . propsToList . fPats
 >   -- We don't need frules with such assumptions because
@@ -1244,22 +1200,6 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >     Nothing -> parens $ text "factProof" <+> newFactName
 >     Just n  -> n
 >
-> bruleToAlt :: BRule -> Doc
-> bruleToAlt r = text "{-" <+> bNotes r <+> text "-}"
->               $$ eqnsToPat (bNew r : bPats r)
->               $$ nest 2 (ppGuards (bBoringGs r) (bGuards r) []
->               $$ text "->" <+> text "Just" <+>
->                     parens (proofToExpr bindAsmps (bProof r)))
->   where bindAsmps _ = Nothing -- XXX: Implement this to use brules with
->                               -- assumptions.
->
-> solveFun :: (Int, [BRule]) -> Doc
-> solveFun (_,[]) = error "bug: solveFun []"
-> solveFun (n, bs) =
->     text "solve" <> int n <+> text ":: [Fact] -> Prop -> Maybe Proof" $$
->     text "solve" <> int n <+> text "asmps" <+> text "goal" <+> text "=" $$
->   nest 2 (text "case goal : map factProp asmps of"
->           $$ nest 2 (vsep (map bruleToAlt bs) $$ text "_ -> Nothing"))
 
 
 > main :: IO ()
@@ -1272,8 +1212,6 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >   text "--"
 >   $$ text "-- Stats:"
 >   $$ text "--"
->   $$ vcat (map (ppStats "solve") solveFuns)
->   $$ text "--"
 >   $$ vsep (map ppFStats $ M.toList groupedFs)
 >   $$ text "--"
 >   $$ text "module TcTypeNatsRules where"
@@ -1285,16 +1223,12 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 >                                             , "Control.Monad(mzero)"
 >                                             ]
 >          ]
->   $$ text "-- Back rules"
->   $$ vsep (map solveFun solveFuns)
 >   $$ text "\n\n-- Forward rules"
 >   $$ codeFRules groupedFs
 >   where
->   (frs,brs) = solverRules
->   solveFuns = groupLens bPats brs
 >   ppStats x (n,as)  = text "--" <+> text x <> int n
 >                       <+> int (length as) <+> text "cases"
->   groupedFs = groupFRules frs
+>   groupedFs = groupFRules solverRules
 
 > type FRulesForOp = M.Map [(Op,Int)] [FRule]
 
