@@ -248,7 +248,7 @@ pAtom pref n =
   do _ <- munch isSpace
      msum
        [ do x <- readS_to_P reads
-            return (Num x Nothing, n, [])
+            return (Num x, n, [])
        , do a <- satisfy (\x -> isAlpha x || x == '_')
             as <- munch (\x -> isAlphaNum x || x == '_')
             return (Var $ V $ strXi $ a:as, n, [])

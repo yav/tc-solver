@@ -68,7 +68,7 @@ toList (LM m) =
      return Fact { factProof = proof edge, factProp = Prop Leq [ from, to ] }
 
   where triv (Num {}) (Num {}) = True
-        triv (Num 0 _) _       = True
+        triv (Num 0) _         = True
         triv _       _         = False
 
 
@@ -113,7 +113,7 @@ reachable m smaller larger =
 findLowerBound :: Facts -> Term -> (Integer, Proof)
 findLowerBound facts = snd . search M.empty
   where
-  search cache t@(Num x _) = (cache, (x, byLeqRefl t))
+  search cache t@(Num x) = (cache, (x, byLeqRefl t))
   search cache t =
     case M.lookup t cache of
       Just b  -> (cache, b)
@@ -129,7 +129,7 @@ findLowerBound facts = snd . search M.empty
 findUpperBound :: Facts -> Term -> Maybe (Proof, Integer)
 findUpperBound facts = snd . search M.empty
   where
-  search cache t@(Num x _) = (cache, Just (byLeqRefl t, x))
+  search cache t@(Num x) = (cache, Just (byLeqRefl t, x))
   search cache t =
     case M.lookup t cache of
       Just b  -> (cache, b)
@@ -236,7 +236,7 @@ insNode t model@(LM m0) =
                  (zes,zm)     = insNode zero m1    -- Should not modify es1
                  (_, es2, m2) = link (byLeq0 t) (zero,zes) (t,es1) zm
              in (es2, m2)
-           Num m _ ->
+           Num m ->
              -- link to a smaller constnat, if any
              let ans2@(es2, m2) =
                    case toNum M.findMax left of
@@ -255,8 +255,8 @@ insNode t model@(LM m0) =
   toNum f x = do guard (not (M.null x))
                  let r = f x
                  case fst r of
-                   Num n _ -> return (n,r)
-                   _       -> Nothing
+                   Num n -> return (n,r)
+                   _     -> Nothing
 
 -- | Try to find a proof that the first term is smaller then the second.
 prove :: Facts -> Term -> Term -> Maybe Proof

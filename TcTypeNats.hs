@@ -117,9 +117,9 @@ addFact f fs =
                             (addOtherInertFact f fs)
   where
   -- XXX: It would be nicer to make this less ad-hoc.
-  impossible (Prop Mul [Num x _, _, Num y _]) = isNothing (divide y x)
-  impossible (Prop Exp [Num x _, _, Num y _]) = isNothing (logExact y x)
-  impossible (Prop Exp [_, Num x _, Num y _]) = isNothing (rootExact y x)
+  impossible (Prop Mul [Num x, _, Num y]) = isNothing (divide y x)
+  impossible (Prop Exp [Num x, _, Num y]) = isNothing (logExact y x)
+  impossible (Prop Exp [_, Num x, Num y]) = isNothing (rootExact y x)
   impossible _ = False
 
 
@@ -372,7 +372,7 @@ impGoal su p
 --------------------------------------------------------------------------------
 
 solve :: Props Fact -> Prop -> Maybe Proof
-solve  _ (Prop Eq [x,y]) | x == y = Just (byRefl x)
+solve _ (Prop Eq [x,y]) | x == y = Just (byRefl x)
 solve ps p = solve0 [] p `mplus` byAsmp ps p
 
 byAsmp :: Props Fact -> Prop -> Maybe Proof

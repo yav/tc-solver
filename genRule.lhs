@@ -1153,7 +1153,7 @@ Convert a rule into one suitable for backward reasoning (i.e., solving things).
 > conPat n ps = text n <+> fsep ps
 >
 > numPat :: Pat -> Pat
-> numPat p    = conPat "Num" [ p, wildPat ]
+> numPat p    = conPat "Num" [ p ]
 >
 > wildPat :: Pat
 > wildPat = char '_'

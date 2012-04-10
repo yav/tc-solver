@@ -22,8 +22,8 @@ x === y = Prop Eq [ x, y ]
 
 normAdd :: Term -> Term -> Term -> Res
 
-normAdd (Num 0 _) y z             = Improved [ y === z ]
-normAdd x y (Num 0 _)             = Improved [ x === num 0, y === num 0 ]
+normAdd (Num 0) y z             = Improved [ y === z ]
+normAdd x y (Num 0)             = Improved [ x === num 0, y === num 0 ]
 
 normAdd x y z
   | x == z                        = Improved [ y === num 0 ]
@@ -31,12 +31,12 @@ normAdd x y z
   | x == y                        = Improved [ Prop Mul [ num 2, x, z ] ]
 
 normAdd (Var x) (Var y) (Var z)   = Ok (Add3 x y z)
-normAdd (Num x _) (Var y) (Var z) = Ok (AddK x y z)
-normAdd (Var x) (Var y) (Num z _) = Ok (AddB x y z)
+normAdd (Num x) (Var y) (Var z) = Ok (AddK x y z)
+normAdd (Var x) (Var y) (Num z) = Ok (AddB x y z)
 
-normAdd (Num x _) (Num y _) z     = Improved [ z === num (x + y) ]
+normAdd (Num x) (Num y) z     = Improved [ z === num (x + y) ]
 
-normAdd (Num x _) y (Num z _)     = if x <= z
+normAdd (Num x) y (Num z)     = if x <= z
                                       then Improved [ y === num (z - x) ]
                                       else Impossible
 
@@ -45,17 +45,17 @@ normAdd x@(Var {}) y@(Num {}) z   = normAdd y x z
 
 
 normMul :: Term -> Term -> Term -> Res
-normMul (Num 0 _) _ z             = Improved [ z === num 0 ]
-normMul (Num 1 _) y z             = Improved [ y === z ]
-normMul x y (Num 1 _)             = Improved [ x === num 1, y === num 1 ]
+normMul (Num 0) _ z             = Improved [ z === num 0 ]
+normMul (Num 1) y z             = Improved [ y === z ]
+normMul x y (Num 1)             = Improved [ x === num 1, y === num 1 ]
 
-normMul (Num x _) (Var y) (Var z)
+normMul (Num x) (Var y) (Var z)
   | y == z                        = Improved [ Var y === num 0 ]
   | otherwise                     = Ok (MulK x y z)
 
-normMul (Num x _) (Num y _) z     = Improved [ z === num (x * y) ]
+normMul (Num x) (Num y) z     = Improved [ z === num (x * y) ]
 
-normMul (Num x _) y (Num z _)     = case divMod z x of
+normMul (Num x) y (Num z)     = case divMod z x of
                                       (a, 0) -> Improved [ y === num a ]
                                       _      -> Impossible
 
@@ -79,7 +79,7 @@ findSumK :: [NormProp] -> Integer -> Var -> [Var]
 findSumK ps a b = [ c | AddK a' b' c <- ps, a == a', b == b' ]
 
 addsTo :: [NormProp] -> Term -> [(Term,Term)]
-addsTo ps (Num z _) = [ (Var x, Var y) | AddB x y z' <- ps, z == z' ]
+addsTo ps (Num z) = [ (Var x, Var y) | AddB x y z' <- ps, z == z' ]
 addsTo ps (Var z)   = mapMaybe check ps
   where
   check (Add3 x y z') | z == z' = Just (Var x, Var y)
@@ -224,8 +224,8 @@ assoc ps (Add3 x y z) =
   ++ -- LR
   do (a,b) <- addsTo ps (Var x)
      s2    <- case b of
-                Var b'   -> findSum  ps b' y
-                Num b' _ -> map Var (findSumK ps b' y)
+                Var b' -> findSum  ps b' y
+                Num b' -> map Var (findSumK ps b' y)
      return (Prop Add [a,s2,Var z])
 
   ++ -- RL
@@ -272,8 +272,8 @@ assoc ps (AddK x y z) =
   ++ -- RL
   do (b,c) <- addsTo ps (Var y)
      s1    <- case b of
-                Var b'   -> map Var (findSumK ps x b')
-                Num b' _ -> return (num (x + b'))
+                Var b' -> map Var (findSumK ps x b')
+                Num b' -> return (num (x + b'))
      return (Prop Add [s1, c, Var z])
 
   ++ -- RR
@@ -298,8 +298,8 @@ assoc ps (AddB x y z) =
   ++ -- LR
   do (a,b) <- addsTo ps (Var x)
      s2    <- case b of
-                Var b'   -> findSum  ps b' y
-                Num b' _ -> map Var (findSumK ps b' y)
+                Var b' -> findSum  ps b' y
+                Num b' -> map Var (findSumK ps b' y)
      return (Prop Add [a,s2,num z])
 
   ++ -- RL

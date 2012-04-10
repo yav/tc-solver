@@ -37,9 +37,6 @@ import Data.List(zipWith5)
 
 newtype Var = V Xi
 
-{- The 'Xi' in the 'Num' constructor stores the original 'Xi' type that
-gave rise to the number. It is there in an attempt to preserve type synonyms. -}
-
 {- The ordering model (TcTypeNatsLeq) makes assumptions about the
    ordering on terms:
   - Variables should come before numbers.  This is useful because we can
@@ -49,10 +46,10 @@ gave rise to the number. It is there in an attempt to preserve type synonyms. -}
     a number and its neighbours.
 -}
 
-data Term = Var Var | Num Integer (Maybe Xi)
+data Term = Var Var | Num Integer
 
 num :: Integer -> Term
-num n = Num n Nothing
+num n = Num n
 
 
 -- | Predicate symbols.  The ordering of these is important!
@@ -150,16 +147,11 @@ data Theorem  = EqRefl      -- forall a.                        a = a
               | AddAssocSym | MulAssocSym | AddMulSym
               | MulExpSym | ExpAddSym | ExpMulSym
               | FunAdd | FunMul | FunExp
-
-              | Sorry
                 deriving Show
 
 
 data Proof    = ByAsmp EvVar
               | Using Theorem [Term] [Proof]   -- Instantiation, sub-proofs
-
-bySorry :: Proof
-bySorry = Using Sorry [] []
 
 byRefl :: Term -> Proof
 byRefl t = Using EqRefl [t] []
@@ -257,15 +249,15 @@ instance Ord Var where
   compare (V x) (V y) = cmpType x y
 
 instance Eq Term where
-  Var x   == Var y    = x == y
-  Num x _ == Num y _  = x == y
-  _       == _        = False
+  Var x == Var y = x == y
+  Num x == Num y = x == y
+  _     == _     = False
 
 instance Ord Term where
-  compare (Var x) (Var y)     = compare x y
-  compare (Var _) _           = LT
-  compare _ (Var _)           = GT
-  compare (Num x _) (Num y _) = compare x y
+  compare (Var x) (Var y) = compare x y
+  compare (Var _) _       = LT
+  compare _ (Var _)       = GT
+  compare (Num x) (Num y) = compare x y
 
 {- We compare facts based only on the property they state because we are
 not interested in facts that state the same thing but differ in the proof. -}
@@ -288,8 +280,8 @@ instance PP Var where
   pp (V x) = pprXi x
 
 instance PP Term where
-  pp (Var x)    = pp x
-  pp (Num x _)  = integer x
+  pp (Var x)  = pp x
+  pp (Num x)  = integer x
 
 instance PP Pred where
   pp op =
