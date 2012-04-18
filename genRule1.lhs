@@ -4,10 +4,9 @@
 > import Data.List(nub, (\\),sort,partition,mapAccumL)
 > import Data.Char(toUpper)
 
-
 > main :: IO ()
-> main = print $ vcat $ map pp allRules
->   where allRules = funRules -- assocRules ++ concatMap specAx assocRules
+> main = print $ genRules allRules
+>   where allRules = concatMap specAx (funRules ++ assocRules)
 
 > names :: [String]
 > names = concatMap block [ 0 :: Integer .. ]
@@ -167,14 +166,24 @@ Concrete Rules
 Generating Haskell
 ==================
 
+
+Generate code for a side condition.
+It uses the appropriate function or its inverse, depending
+on where the free variables appear in the rule.  For example,
+
+a' + b' = c'
+
+  becomes: let c' = a' + b',            if c' appears only in the conclusion.
+  becomes: Just a' <- [ c' `minus` a' ] if a' appears only in the conclusion.
+
 > genSide :: Rule -> Prop -> Doc
 > genSide r (Prop op [ a, b, c ])
 >   | isGoal c = text "let" <+> pp c <+> text "=" <+>
 >                pp a <+> text fOp <+> pp b
 >   | isGoal a = text "Just" <+> pp a <+> text "<-" <+>
->                pp c <+> text lOp <+> pp b
+>                brackets (pp c <+> text lOp <+> pp b)
 >   | isGoal b = text "Just" <+> pp b <+> text "<-" <+>
->                pp c <+> text rOp <+> pp a
+>                brackets (pp c <+> text rOp <+> pp a)
 >   where
 >   conc_vars         = pTerms (rConc r)
 >   asmp_vars         = [ x | (_, Prop op1 ts) <- rAsmps r
@@ -191,91 +200,109 @@ Generating Haskell
 >
 > genSide _ _ = error "unexpected side"
 
-> termPatExpr :: Term -> Doc
-> termPatExpr t@(Var _) = pp t
-> termPatExpr t         = parens (text "Num" <+> pp t)
 
 
+
+Generate code for a rule.  A rule "fires" by emmiting its conclusion,
+if it can find proofs about it hypothesis in the list of profvided facts.
 
 Example:
 
-{a, b, c, d} (A : 1 <= a) (B : a * b == c) (C : a * d == c) =>
-  DivFunL@(a, b, c, d)
-    A
-    B
-    C
-  : b == d
+{- {a, b, c, d} (A : 1 <= b) (B : a * b == c) (C : d * b == c) =>
+     DivFunR@(a, b, c, d)
+       A
+       B
+       C
+     : a == d
+-}
+do (pB, a, b, c) <- lookupProof facts Mul
+   Just pA <- [Leq.prove facts (Num 1) (b)]
+   (pC, d, e, f) <- lookupProof facts Mul
+   guard (c == f)
+   guard (b == e)
+   return Fact
+     { factProp = Prop Eq [a, d]
+     , factProof = Using DivFunR [a, b, c, d]
+                     [pA, pB, pC]
+     }
 
-rule facts =
-  do (proofB, a, b, c) <- lookupFact Mul facts
-     proofA <- LEQ.prove facts 1 a
-     (proofC, a1, d, c1) <- lookupFact Mul facts
-     guard (a == a1)
-     guard (c == c1)
-     return (By DivFunL [a,b,c,d] proofA proofB proofC, Prop Eq [b,d])
 
 > genRule :: Rule -> Doc
 > genRule r =
->   let ((_,delayed,sides),d) = mapAccumL genAsmp ([],[], rSides r) (rAsmps r)
->   in text "do"
+>   let leqs   = [ (n,a,b) | (n,Prop Leq [a,b]) <- rAsmps r ]
+>       others = [ (n,p)   | (n,p@(Prop op _)) <- rAsmps r, op /= Leq ]
+>       ((_,delayed,sides),d) = mapAccumL genAsmp ([],leqs,rSides r) others
+>   in text "{-" <+> pp r $$
+>      text "-}" $$
+>      text "do"
 >        <+> (vcat d
 >         $$ vcat (map (genSide r) sides)
 >         $$ vcat (map genLeq delayed)
->         $$ text "return" <+> genTuple
->               [ genProof $
->                  rProof r [ (a,Var a) | a <- rForall r ]
->                           [ (a, ByAsmp (asmpName a)) | (a,_) <- rAsmps r ]
->               , genProp (rConc r)
->               ])
->
+>         $$ text "return" <+> text "Fact"
+>         $$ nest 2
+>            ( text "{ factProp" <+> text "=" <+> genProp (rConc r)
+>           $$ text ", factProof" <+> text "=" <+>
+>                genProof (rProof r [ (a,Var a) | a <- rForall r ]
+>                           [ (a, ByAsmp (asmpName a)) | (a,_) <- rAsmps r ])
+>           $$ text "}"
+>          )
+>         )
 >   where
->   genAsmp (used,delayed,sides) (name, Prop Leq [a,b])
->     | all (`elem` used) (termVars a ++ termVars b) =
->                   ((used, delayed,            sides), genLeq (name,a,b))
->     | otherwise = ((used, (name,a,b):delayed, sides), empty)
-
->   genAsmp _ (_, Prop Eq _) = error "unexpected Eq in genAsmp"
->
->   genAsmp (used,delayed,sides) (name, prop) =
+>   genAsmp _ (_, Prop Leq _) = error "unexpected Leq in genAsmp"
+>   genAsmp _ (_, Prop Eq _)  = error "unexpected Eq  in genAsmp"
+>   genAsmp (used,leqs,sides) (name, prop) =
 >     let ((used1,eqs),prop1) = renameProp (used,[]) prop
->         (here,later) = partition (itIsTime used1) sides
->     in ((used1,delayed,later), genOther name eqs prop1
->                                $$ vcat (map (genSide r) here))
+>         (hereS,laterS)      = partition (nowSide used1) sides
+>         (hereL,laterL)      = partition (nowLeq used1) leqs
+>     in ( (used1,laterL,laterS)
+>        , genOther name eqs prop1
+>            $$ vcat (map (genSide r) hereS)
+>            $$ vcat (map genLeq      hereL)
+>        )
+>
+>   allDefined ds vs       = all (`elem` ds) vs
+>   nowLeq defined (_,a,b) = allDefined defined (concatMap varsOf [a,b])
+>   nowSide defined s      = allDefined defined (varsOfProp s)
+
+>   varsOfProp (Prop _ ts) = concatMap varsOf ts
+>
+>   varsOf (Var x) = [x]
+>   varsOf (Con x) = [x]
+>   varsOf (Num _) = []
 >
 >   genProp (Prop op ts) =
->     text "Prop" <+> text (show op) <+> genList (map pp ts)
+>     text "Prop" <+> text (show op) <+> genList (map genTerm ts)
 >
->   genProof (By p ts as) = text "Using" <+> text p <+> genList (map pp ts)
+>   genProof (By p ts as) = text "Using" <+> text p <+> genList (map genTerm ts)
 >       $$ nest 2 (genList (map genProof as))
 >   genProof (DefAx op a b) =
->     text "Using" <+> parens (text "Def" <> text (show op) <+> pp a <+> pp b)
+>     text "Using" <+> parens (text "Def" <> text (show op)
+>                                         <+> genNumTerm a <+> genNumTerm b)
 >                                    <+> genList [] <+> genList []
 >   genProof (ByAsmp t) = text t
 
 
->   termVars (Var x) = [x]
->   termVars _       = []
->
->   itIsTime vs (Prop _ ts) = null [ () | Con x <- ts, x `notElem` vs ]
-
-
-
 >   genLeq (n,a,b) = text "Just" <+> text (asmpName n) <+> text "<-" <+>
->                     genList [ text "LEQ.prove facts" <+> pp a <+> pp b ]
+>        genList [ text "Leq.prove (getLeqFacts facts)" <+> parens (genTerm a)
+>                                         <+> parens (genTerm b) ]
 >
 >   genOther name eqs (Prop op [a,b,c]) =
->     genTuple [ text (asmpName name), pp a, pp b, pp c ]
+>     genTuple [ text (asmpName name), genTerm a, genTerm b, genTerm c ]
 >        <+> text "<-" <+> text "lookupProof facts" <+> text (show op)
 >         $$ vcat (map genEq eqs)
 >   genOther _ _ _ = error "Unexpected genOther"
 >
+>   genTerm (Var x) = text x
+>   genTerm t       = text "Num" <+> genNumTerm t
+>
+>   genNumTerm (Num n)  = integer n
+>   genNumTerm (Con n)  = text (conName n)
+>   genNumTerm (Var _)  = error "Not a num term"
+>
 >   genTuple ds  = parens (hsep (punctuate comma ds))
 >   genList ds   = brackets (hsep (punctuate comma ds))
->
 >   genEq (a,b)  = text "guard" <+> parens (text a <+> text "==" <+> text b)
 >
-
-
 
 >   renameProp used (Prop op ts) =
 >     let (used1,ts1) = mapAccumL renameTerm used ts
@@ -284,16 +311,54 @@ rule facts =
 >   renameTerm (used,eqs) (Var x)
 >     | x `elem` used   = let y = newName names used
 >                         in ( (y:used, (x,y):eqs), Var y )
+>     | otherwise       = ((x : used, eqs), Var x)
 >
 >   renameTerm (used,eqs) (Con x)
->     | x `elem` used   = let y = newName (map (++"'") names) used
->                         in ( (y:used, (x,y):eqs), Con y )
+>     | conName x `elem` used   = let y = newName (map conName names) used
+>                                 in ( (y:used, (x,y):eqs), Con y )
+>     | otherwise       = ((x : used, eqs) , Con x)
 >
 >   renameTerm s t = (s, t)
->
+
 >   newName ns used = head $ filter (`notElem` used) ns
->
+>   conName n       = n ++ "'"
 >   asmpName n      = 'p' : n
+
+
+
+> genRules :: [Rule] -> Doc
+> genRules rs =
+>   text "{-" <+> vcat
+>     [ text "WARNING: This file is generated automatically."
+>     , text "Plase do not modify, because changes may get lost."
+>     ] $$
+>   text "-}" $$
+>   vcat (map text
+>     [ "module TcTypesRules(implied) where"
+>     , "import TcTypeNatsBase"
+>     , "import TcTypeNatsFacts"
+>     , "import qualified TcTypeNatsLeq as Leq"
+>     , "import TcTypeNatsProps"
+>     , "import TcTypeNatsEval"
+>     , "import Control.Monad(guard)"
+>     , " "
+>     , "lookupProof :: Facts -> Pred -> [(Proof, Term, Term, Term)]"
+>     , "lookupProof fs p = [ (n, a, b, c)"
+>     , "  | Fact { factProp = Prop _ [a,b,c], factProof = n }"
+>     , "                                 <- getPropsFor p (getOtherFacts fs) ]"
+>     , " "
+>     , "implied :: Facts -> [Fact]"
+>     , "implied facts = concat"
+>     ]) $$ nest 2 (punct (map genRule rs) $$ text "]")
+>
+>   where punct []       = empty
+>         punct (a : as) = text "[" <+> a $$ vcat [ text "," <+> b | b <- as ]
+
+
+
+
+
+
 
 
 
@@ -337,21 +402,22 @@ Pretty Printing
 >
 >
 > instance PP Rule where
->   pp r = tPars <+> pPars $$ nest 2 (pProof $$ pConc $$ pSides)
+>   pp r = tPars <+> (pPars $$ pSides $$ line $$ pProof $$ pConc)
 >     where
 >     tPars = case rForall r of
 >               [] -> empty
 >               vs -> braces $ fsep $ punctuate comma $ map text vs
 >     pPars = case rAsmps r of
 >               [] -> empty
->               ts -> fsep [ parens (text x <+> colon <+> pp p) | (x,p) <- ts ]
->                     <+> text "=>"
+>               ts -> vcat [ text x <+> colon <+> pp p | (x,p) <- ts ]
 >     pProof = pp $ rProof r [ (x,Var x) | x <- rForall r ]
 >                            [ (x, ByAsmp x) | (x,_) <- rAsmps r ]
 >     pConc  = colon <+> pp (rConc r)
 >     pSides = case rSides r of
 >                [] -> empty
 >                ss -> text "if" <+> vcat (map pp ss)
+>
+>     line = text (replicate 20 '-')
 
 
 

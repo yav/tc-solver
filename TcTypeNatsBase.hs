@@ -162,6 +162,15 @@ data Theorem  = EqRefl      -- forall a.                        a = a
               | AddAssocSym | MulAssocSym | AddMulSym
               | MulExpSym | ExpAddSym | ExpMulSym
               | FunAdd | FunMul | FunExp
+
+
+              -- New rules
+              | AddFun | SubFunL | SubFunR
+              | MulFun | DivFunL | DivFunR
+              | ExpFun | SqrtFun | LogFun
+
+              | AddAssocFL | AddAssocFR | AddAssocBL | AddAssocBR
+              | MulAssocFL | MulAssocFR | MulAssocBL | MulAssocBR
                 deriving Show
 
 
