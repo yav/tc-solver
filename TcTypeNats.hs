@@ -95,32 +95,21 @@ addFact f fs =
     Just f1 -> Improved [f1]
     Nothing ->
       case factProp f of
+        _ | impossible (factProp f) -> Inconsistent
+
         Prop Eq  [s,t] -> addEqFact  (factProof f) s t fs
         Prop Leq [s,t] -> addLeqFact (factProof f) s t fs
 
-{-
-        _ | Norm.Impossible  <- res -> Inconsistent
-          | Norm.Improved fs <- res -> Improved $ map (Fact bySorry) fs
-          | Norm.OK f        <- res -> 
-          where res = Norm.fromProp (factProp f)
--}
-
-
-        _ | impossible (factProp f) -> Inconsistent
         _ ->
           case solve (getOtherFacts fs) (factProp f) of
             Just _ -> AlreadyKnown
 
             -- XXX: Modify "implied" to generate Props directly.
-            _      -> Added (Props.fromList (implied fs f))
-                            (addOtherInertFact f fs)
-  where
-  -- XXX: It would be nicer to make this less ad-hoc.
-  impossible (Prop Mul [Num x, _, Num y]) = isNothing (divide y x)
-  impossible (Prop Exp [Num x, _, Num y]) = isNothing (logExact y x)
-  impossible (Prop Exp [_, Num x, Num y]) = isNothing (rootExact y x)
-  impossible _ = False
-
+            _      -> let new = addOtherInertFact f fs
+                          imp = Props.fromList (implied new (propPred f))
+                          dbg = vcat [ pp (factProof f) | f <- Props.toList imp ]
+                      in ppTrace (text "imp:" <+> dbg) $
+                          Added imp new
 
 
 -- Using Existing Goals --------------------------------------------------------
@@ -398,6 +387,23 @@ solve _ (Prop Exp [Num x, Num y, Num z])
 solve ps p =
   do q <- find (\x -> propArgs x == propArgs p) $ getPropsFor (propPred p) ps
      return (factProof q)
+
+
+impossible :: Prop -> Bool
+impossible (Prop Eq  [Num x, Num y])    = x /= y
+
+impossible (Prop Leq [Num x, Num y])    = y < x
+
+impossible (Prop Add [Num x, _, Num y]) = isNothing (minus y x)
+impossible (Prop Add [_, Num x, Num y]) = isNothing (minus y x)
+
+impossible (Prop Mul [Num x, _, Num y]) = isNothing (divide y x)
+impossible (Prop Mul [_, Num x, Num y]) = isNothing (divide y x)
+
+impossible (Prop Exp [Num x, _, Num y]) = isNothing (logExact y x)
+impossible (Prop Exp [_, Num x, Num y]) = isNothing (rootExact y x)
+
+impossible _                            = False
 
 
 

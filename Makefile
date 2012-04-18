@@ -11,7 +11,7 @@ doc/Notes.pdf: Notes.lhs
 	pdflatex --output-directory=doc Notes.lhs
 
 TcTypeNatsRules.hs: ./genRule.lhs
-	runhaskell $<
+	runhaskell $< > $@
 
 .PHONY: api
 api: api/UI.html
