@@ -107,9 +107,8 @@ addFact f fs =
             -- XXX: Modify "implied" to generate Props directly.
             _      -> let new = addOtherInertFact f fs
                           imp = Props.fromList (implied new (propPred f))
-                          dbg = vcat [ pp (factProof f) | f <- Props.toList imp ]
-                      in ppTrace (text "imp:" <+> dbg) $
-                          Added imp new
+                          -- dbg = vcat [ pp (factProp f) <+> pp (factProof f) | f <- Props.toList imp ]
+                      in Added imp new
 
 
 -- Using Existing Goals --------------------------------------------------------
@@ -390,20 +389,31 @@ solve ps p =
 
 
 impossible :: Prop -> Bool
-impossible (Prop Eq  [Num x, Num y])    = x /= y
+impossible (Prop Eq  [Num x, Num y])      = not (x == y)
 
-impossible (Prop Leq [Num x, Num y])    = y < x
+impossible (Prop Leq [Num x, Num y])      = not (x <= y)
 
-impossible (Prop Add [Num x, _, Num y]) = isNothing (minus y x)
-impossible (Prop Add [_, Num x, Num y]) = isNothing (minus y x)
+impossible (Prop Add [Num x, _, Num y])   = isNothing (minus y x)
+impossible (Prop Add [_, Num x, Num y])   = isNothing (minus y x)
 
-impossible (Prop Mul [Num x, _, Num y]) = isNothing (divide y x)
-impossible (Prop Mul [_, Num x, Num y]) = isNothing (divide y x)
+impossible (Prop Mul [Num x, _, Num y])
+  | x == 0                                = y /= 0
+  | x > 0                                 = isNothing (divide y x)
 
-impossible (Prop Exp [Num x, _, Num y]) = isNothing (logExact y x)
-impossible (Prop Exp [_, Num x, Num y]) = isNothing (rootExact y x)
+impossible (Prop Mul [_, Num x, Num y])
+  | x == 0                                = y /= 0
+  | x > 0                                 = isNothing (divide y x)
 
-impossible _                            = False
+impossible (Prop Exp [Num x, _, Num y])
+  | x == 0                                = y > 1
+  | x == 1                                = y /= 1
+  | x >  1                                = isNothing (logExact y x)
+
+impossible (Prop Exp [_, Num x, Num y])
+  | x == 0                                = y /= 1
+  | x  > 0                                = isNothing (rootExact y x)
+
+impossible _                              = False
 
 
 
