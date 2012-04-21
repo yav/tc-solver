@@ -68,15 +68,20 @@ insertFact g props =
     Inconsistent  -> mzero
     AlreadyKnown  -> return (noChanges props)
     Improved f    -> return (noChanges props) { newFacts = Props.singleton f }
-    Added new newProps -> return
-      InsertInert { newGoals     = Props.toList (goals props)
-                  , newFacts     = new
-                  , solvedGoals  = []
-                  , newInerts    = Inerts { facts  = newProps
-                                          , goals  = Props.empty
-                                          }
-                  }
 
+    -- XXX: Should export equalities, in case ither solvers are interested
+    Added new newProps ->
+      case addFactsTrans newProps new of
+        Nothing -> mzero
+        Just fs -> return
+          InsertInert { newGoals     = Props.toList (goals props)
+                      , newFacts     = Props.empty
+                      , solvedGoals  = []
+                      , newInerts    = Inerts { facts  = fs
+                                              , goals  = Props.empty
+                                              }
+                      }
+    
 
 
 {-| Try to extend a collection of already known facts.
@@ -90,7 +95,7 @@ new work.
 
 addFact :: Fact -> Facts -> AddFact
 addFact f fs
-  | gTrace (text "adding fact:" <+> pp f) = undefined
+  -- | gTrace (text "adding fact:" <+> pp f) = undefined
   | otherwise =
   case improveFact (getEqFacts fs) f of
     Just f1 -> Improved f1
@@ -133,17 +138,28 @@ Furthermore, improvements "restart" so we do less work if we do equalities
 first. -}
 
 addFactsTrans :: Facts -> Props Fact -> Maybe Facts
-addFactsTrans fs todo =
-  case getOne todo of
-    Nothing -> return fs
-    Just (f,more) ->
-      case addFact f fs of
-        Inconsistent    -> mzero
-        AlreadyKnown    -> addFactsTrans fs more
-        Improved f1     -> addFactsTrans fs (Props.insert f1 more)
-        Added more2 fs1 -> addFactsTrans fs1 (Props.union more more2)
+addFactsTrans fs todo = withFacts todo fs [] [] ([],[])
+  where
+  withFacts work fs eqs leqs (hd,tl) =
+    loop fs (Props.getPropsFor Eq work ++ eqs)
+            (Props.getPropsFor Leq work ++ leqs)
+            (hd, Prelude.filter isOther (Props.toList work) : tl)
 
+  loop fs (eq:eqs) leqs   others      = add1 eq fs eqs leqs others
+  loop fs [] (leq : leqs) others      = add1 leq fs [] leqs others
+  loop fs [] [] ((f : more) : hd, tl) = add1 f   fs [] []   (more : hd, tl)
+  loop fs [] [] ([] : hd, tl)         = loop     fs [] []   (hd, tl)
+  loop fs [] [] ([], [])              = return fs
+  loop fs [] [] ([], tl)              = loop     fs [] []   (reverse tl, [])
 
+  add1 f fs eqs leqs others =
+    case addFact f fs of
+      Inconsistent   -> mzero
+      AlreadyKnown   -> loop fs eqs leqs others
+      Improved f1    -> add1 f1 fs eqs leqs others
+      Added work fs1 -> withFacts work fs1 eqs leqs others
+
+  isOther p = not (propPred p == Eq || propPred p == Leq)
 
 
 
