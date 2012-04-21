@@ -1,8 +1,10 @@
 > module Main(main) where
 
 > import Text.PrettyPrint
-> import Data.List(nub, (\\),sort,partition,mapAccumL)
+> import Data.List(nub, (\\),sort,partition,mapAccumL,groupBy)
 > import Data.Char(toUpper)
+> import Data.Maybe(fromMaybe)
+> import Control.Monad(guard,zipWithM)
 
 > main :: IO ()
 > main = print $ genRules allRules
@@ -14,24 +16,6 @@
 >         block n = [ c : show n | c <- [ 'a' .. 'z' ] ]
 
 
-> specAx :: Rule -> [Rule]
-> specAx r =
->   do (n, Prop op [ Var x, Var y, Var z ]) <- rAsmps r
->      let upd (Var a) | a `elem` [ x, y, z ] = Con a
->          upd a                              = a
->          updP (Prop o ts)                   = Prop o (map upd ts)
->      return Rule
->        { rForall = rForall r \\ [ x, y, z ]
->        , rAsmps  = [ (m,updP p) | (m,p) <- rAsmps r, m /= n ]
->        , rConc   = updP $ rConc r
->        , rSides  = nub $ Prop op [ Con x, Con y, Con z ] : rSides r
->        , rProof  = \ts ps -> rProof r (map conVar [x,y,z] ++ ts)
->                       ((n, DefAx op (Con x) (Con y)) : ps)
->        }
->   where conVar x                         = (x, Con x)
-
-
-
 
 
 
@@ -41,7 +25,7 @@ Terms, Propositions, and Rules
 > data Term   = Con String        -- ^ Schematic number variable
 >             | Num Integer       -- ^ A numeric constant
 >             | Var String        -- ^ Uninterpreted constant
->               deriving (Eq,Ord)
+>               deriving (Eq,Ord,Show)
 
 > data Prop   = Prop { pOp :: Op, pTerms :: [Term] }
 >               deriving Eq
@@ -113,31 +97,34 @@ Instantiate Fun* with basic axioms:
 
 
 > funRules :: [Rule]
-> funRules = concatMap spec1 $
->   [ rule "AddFun"  [ a :+ b === c, a :+ b === d ] (c === d)
->   , rule "SubFunR" [ a :+ b === c, d :+ b === c ] (a === d)
->   , rule "SubFunL" [ a :+ b === c, a :+ d === c ] (b === d)
->   ]
->   ++
->   [ rule "MulFun"  [              a :* b === c, a :* b === d ] (c === d)
->   , rule "DivFunR" [ Num 1 <== b, a :* b === c, d :* b === c ] (a === d)
->   , rule "DivFunL" [ Num 1 <== a, a :* b === c, a :* d === c ] (b === d)
->   ]
->   ++
->   [ rule "ExpFun"  [              a :^ b === c, a :^ b === d ] (c === d)
->   , rule "SqrtFun" [ Num 1 <== b, a :^ b === c, d :^ b === c ] (a === d)
->   , rule "LogFun"  [ Num 2 <== a, a :^ b === c, a :^ d === c ] (b === d)
->   ]
+> funRules = baseFun ++ concatMap spec1 (frules ++ cancel)
+>   where
+>   frules =
+>     [ rule "AddFun"  [ a :+ b === c, a :+ b === d ] (c === d)
+>     , rule "MulFun"  [ a :* b === c, a :* b === d ] (c === d)
+>     , rule "ExpFun"  [ a :^ b === c, a :^ b === d ] (c === d)
+>     ]
 >
->   where a : b : c : d : _ = map Var names
->         spec1 r = r : take 1 (specAx r)
-
-
+>   cancel =
+>     [ rule "SubFunR" [ a :+ b === c, d :+ b === c ] (a === d)
+>     , rule "SubFunL" [ a :+ b === c, a :+ d === c ] (b === d)
+>     , rule "DivFunR" [ Num 1 <== b, a :* b === c, d :* b === c ] (a === d)
+>     , rule "DivFunL" [ Num 1 <== a, a :* b === c, a :* d === c ] (b === d)
+>     , rule "SqrtFun" [ Num 1 <== b, a :^ b === c, d :^ b === c ] (a === d)
+>     , rule "LogFun"  [ Num 2 <== a, a :^ b === c, a :^ d === c ] (b === d)
+>     ]
+>
+>   a : b : c : d : _ = map Var names
+>
+>   spec1 r = r : take 1 (specAx r)
+>
+>   baseFun = do f <- frules
+>                a <- baseRules
+>                take 1 (cut f a)
 
 > anihRules :: [Rule]
 > anihRules =
 >   [ rule "MulTo0L"  [ Num 2 <== a, a :* b === b ] (b === Num 0)
->   , rule "MulTo0R"  [ Num 2 <== b, a :* b === a ] (a === Num 0)
 >   ]
 >   where a : b : c : d : _ = map Var names
 
@@ -193,14 +180,9 @@ Instantiate Fun* with basic axioms:
 
 
 
-> baseRules :: [Rule]
-> baseRules =
->   [ rule "Add0_L" [] (a :+ Num 0 === a)
->   ]
->   where a : b : c : x : y : z : _ = map Var names
+Generating New Rules By Instantiation
+=====================================
 
-> {-
-> cut1gt
 
 > specAx :: Rule -> [Rule]
 > specAx r =
@@ -217,7 +199,58 @@ Instantiate Fun* with basic axioms:
 >                       ((n, DefAx op (Con x) (Con y)) : ps)
 >        }
 >   where conVar x                         = (x, Con x)
-> -}
+
+
+
+
+> baseRules :: [Rule]
+> baseRules =
+>   [ rule "Add0_R" []              (a :+ Num 0 === a)
+>   , rule "Mul1_R" []              (a :* Num 1 === a)
+>   , rule "Mul0_R" []              (a :* Num 0 === Num 0)
+>   , rule "Exp0_R" []              (a :^ Num 0 === Num 1)
+>   , rule "Exp1_R" []              (a :^ Num 1 === a)
+>   , rule "Exp0_L" [ Num 1 <== a ] (Num 0 :^ a === Num 0)
+>   , rule "Exp1_L" []              (Num 1 :^ a === Num 1)
+>   ]
+>   where a = Var "zz"
+
+
+> -- assumng no name clashes
+> cut frule arule =
+>   do (n,a) <- rAsmps frule
+>      Just su <- [ matchProp a (rConc arule) ]
+>      return Rule { rForall = sort $ nub $ rForall arule ++
+>                                      (rForall frule \\ map fst su)
+>                  , rAsmps = rAsmps arule ++
+>                               [ (m, instProp su p) | (m,p) <- rAsmps frule,
+>                                                                     m /= n ]
+>                  , rSides = rSides arule ++ rSides frule
+>                  , rConc  = instProp su (rConc frule)
+>                  , rProof = \ts ps ->
+>                               rProof frule (su ++ ts)
+>                                            ((n, rProof arule ts ps) : ps)
+>                  }
+
+> matchTerm :: Term -> Term -> Maybe [(String,Term)]
+> matchTerm (Num x) (Num y) | x == y = Just []
+> matchTerm (Var x) t                = Just [ (x,t) ]
+> matchTerm _ _                      = Nothing -- assumes no 'Con's
+>
+> matchProp :: Prop -> Prop -> Maybe [(String,Term)]
+> matchProp (Prop op1 ts1) (Prop op2 ts2)
+>   = do guard (op1 == op2)
+>        su  <- zipWithM matchTerm ts1 ts2
+>        mapM check (groupBy (\(x,_) (y,_) -> x == y) (concat su))
+>   where
+>   check ~((x,y) : ys) = guard (all (== y) (map snd ys)) >> return (x,y)
+
+> instTerm :: [(String,Term)] -> Term -> Term
+> instTerm su t@(Var x) = fromMaybe t (lookup x su)
+> instTerm _ t          = t
+>
+> instProp :: [(String,Term)] -> Prop -> Prop
+> instProp su (Prop op ts) = Prop op (map (instTerm su) ts)
 
 
 

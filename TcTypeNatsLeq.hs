@@ -448,7 +448,7 @@ monoExpForward1 p a b c facts =
          , let ab = max_a ^ max_b
   ]
 
-  where exp1R t    = Using Root1 [t] []    -- a ^ 1 = a
+  where exp1R t    = Using Exp1_R [t] []    -- a ^ 1 = a
         defExp x y = Using (DefExp x y) [] []
 
 

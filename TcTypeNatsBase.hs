@@ -140,19 +140,17 @@ data Theorem  = EqRefl      -- forall a.                        a = a
               | ExpLeq1
               | ExpLeq2
 
+              | Add0_L    -- forall a. 0 + 0 = a
               | Add0_R    -- forall a. a + 0 = a
-              | Add0_L    -- forall a. 0 + a = a
+              | Mul0_L    -- forall a. a * 0 = 0
+              | Mul1_L    -- forall a. a * 1 = a
+              | Mul0_R    -- forall a. 0 * a = 0
+              | Mul1_R    -- forall a. 1 * a = a
 
-
-              | Mul0_R    -- forall a. a * 0 = 0
-              | Mul0_L    -- forall a. 0 * a = 0
-
-              | Mul1_R    -- forall a. a * 1 = a
-              | Mul1_L    -- forall a. 1 * a = a
-
-              | Root0     -- forall a. a ^ 0 = 1
-              | Root1     -- forall a. a ^ 1 = a
-              | Log1      -- forall a. 1 ^ a = 1
+              | Exp0_R    -- forall a.             a ^ 0 = 1
+              | Exp1_R    -- forall a.             a ^ 1 = a
+              | Exp0_L    -- forall a. (1 <= a) => 0 ^ a = 0
+              | Exp1_L    -- forall a.             1 ^ a = 1
 
 
               | AddComm | MulComm

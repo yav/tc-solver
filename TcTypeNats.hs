@@ -385,9 +385,9 @@ solve _ (Prop Mul [x, Num 1, z]) | x == z   = Just (Using Mul1_R [z] [])
 solve _ (Prop Mul [Num x, Num y, Num z])
   | x * y == z                              = Just $ Using (DefMul x y) [] []
 
-solve _ (Prop Exp [x, Num 0, Num 1])        = Just (Using Root0 [x] [])
-solve _ (Prop Exp [x, Num 1, z]) | x == z   = Just (Using Root1 [z] [])
-solve _ (Prop Exp [Num 1, x, Num 1])        = Just (Using Log1  [x] [])
+solve _ (Prop Exp [x, Num 0, Num 1])        = Just (Using Exp0_R [x] [])
+solve _ (Prop Exp [x, Num 1, z]) | x == z   = Just (Using Exp1_R [z] [])
+solve _ (Prop Exp [Num 1, x, Num 1])        = Just (Using Exp1_L [x] [])
 solve _ (Prop Exp [Num x, Num y, Num z])
   | x ^ y == z                              = Just $ Using (DefExp x y) [] []
 
