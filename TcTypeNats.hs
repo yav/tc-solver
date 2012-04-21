@@ -25,7 +25,7 @@ import Debug.Trace
 import Text.PrettyPrint
 import Data.Maybe(fromMaybe,isNothing)
 import Data.List(find)
-import Control.Monad(MonadPlus(..),msum,foldM)
+import Control.Monad(MonadPlus(..),msum)
 
 -- | An colection of a facts and goals that cannot interact with each other.
 data Inerts = Inerts { facts :: Facts, goals :: Props Goal }
@@ -126,32 +126,23 @@ goalToFact :: Goal -> Fact
 goalToFact g = Fact { factProof = ByAsmp (goalName g), factProp = goalProp g }
 
 
-{- Add a fact and all the facts that follow from it.  The arguments are
-ordered like this so that the function can be used conveniently with 'foldM'. -}
-
-addFactTrans :: Facts -> Fact -> Maybe Facts
-addFactTrans facts0  fact =
-  case addFact fact facts0 of
-    Inconsistent    -> mzero
-    AlreadyKnown    -> return facts0
-    Improved f      -> addFactTrans facts0 f
-    Added fs facts1 -> addFactsTrans  facts1 fs
-
-
 {- Add a collection of facts and all the facts that follow from them.
 We add equalities first, because they might lead to improvements that,
 in turn, would enable the discovery of additional facts.
 Furthermore, improvements "restart" so we do less work if we do equalities
 first. -}
 
-addFactsTrans' :: Facts -> [Fact] -> Maybe Facts
-addFactsTrans' fs = foldM addFactTrans fs
-
 addFactsTrans :: Facts -> Props Fact -> Maybe Facts
-addFactsTrans fs facts0 =
-  case addFactsTrans' fs (Props.toList facts0) of
-    Nothing -> Nothing
-    Just x  -> Just x
+addFactsTrans fs todo =
+  case getOne todo of
+    Nothing -> return fs
+    Just (f,more) ->
+      case addFact f fs of
+        Inconsistent    -> mzero
+        AlreadyKnown    -> addFactsTrans fs more
+        Improved f1     -> addFactsTrans fs (Props.insert f1 more)
+        Added more2 fs1 -> addFactsTrans fs1 (Props.union more more2)
+
 
 
 
