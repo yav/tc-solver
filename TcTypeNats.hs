@@ -67,8 +67,7 @@ insertFact g props =
   case addFact g (facts props) of
     Inconsistent  -> mzero
     AlreadyKnown  -> return (noChanges props)
-    Improved fs   -> return (noChanges props)
-                            { newFacts = Props.fromList fs }
+    Improved f    -> return (noChanges props) { newFacts = Props.singleton f }
     Added new newProps -> return
       InsertInert { newGoals     = Props.toList (goals props)
                   , newFacts     = new
@@ -90,9 +89,11 @@ new work.
 -}
 
 addFact :: Fact -> Facts -> AddFact
-addFact f fs =
+addFact f fs
+  | gTrace (text "adding fact:" <+> pp f) = undefined
+  | otherwise =
   case improveFact (getEqFacts fs) f of
-    Just f1 -> Improved [f1]
+    Just f1 -> Improved f1
     Nothing ->
       case factProp f of
         _ | impossible (factProp f) -> Inconsistent
@@ -133,7 +134,7 @@ addFactTrans facts0  fact =
   case addFact fact facts0 of
     Inconsistent    -> mzero
     AlreadyKnown    -> return facts0
-    Improved fs     -> addFactsTrans' facts0 fs
+    Improved f      -> addFactTrans facts0 f
     Added fs facts1 -> addFactsTrans  facts1 fs
 
 

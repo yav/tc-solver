@@ -172,7 +172,7 @@ data Theorem  = EqRefl      -- forall a.                        a = a
               | AddAssocFL | AddAssocFR | AddAssocBL | AddAssocBR
               | MulAssocFL | MulAssocFR | MulAssocBL | MulAssocBR
 
-              | MulTo0L
+              | MulTo0L | MulTo0R
                 deriving Show
 
 

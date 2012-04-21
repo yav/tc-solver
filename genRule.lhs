@@ -5,8 +5,8 @@
 > import Data.Char(toUpper)
 
 > main :: IO ()
-> main = print $ genRules $ allRules ++ otherRules ++ concatMap specAx allRules
->   where allRules = funRules ++ assocRules
+> main = print $ genRules allRules
+>   where allRules = funRules ++ anihRules ++ otherRules ++ assocRules
 
 > names :: [String]
 > names = concatMap block [ 0 :: Integer .. ]
@@ -29,6 +29,8 @@
 >                       ((n, DefAx op (Con x) (Con y)) : ps)
 >        }
 >   where conVar x                         = (x, Con x)
+
+
 
 
 
@@ -104,8 +106,14 @@ Syntactic Sugar
 Concrete Rules
 ==============
 
+Instantiate Fun* with basic axioms:
+  0 + a = a
+  1 * a = a
+  0 * a = 0
+
+
 > funRules :: [Rule]
-> funRules =
+> funRules = concatMap spec1 $
 >   [ rule "AddFun"  [ a :+ b === c, a :+ b === d ] (c === d)
 >   , rule "SubFunR" [ a :+ b === c, d :+ b === c ] (a === d)
 >   , rule "SubFunL" [ a :+ b === c, a :+ d === c ] (b === d)
@@ -122,10 +130,23 @@ Concrete Rules
 >   ]
 >
 >   where a : b : c : d : _ = map Var names
+>         spec1 r = r : take 1 (specAx r)
+
+
+
+> anihRules :: [Rule]
+> anihRules =
+>   [ rule "MulTo0L"  [ Num 2 <== a, a :* b === b ] (b === Num 0)
+>   , rule "MulTo0R"  [ Num 2 <== b, a :* b === a ] (a === Num 0)
+>   ]
+>   where a : b : c : d : _ = map Var names
+
 
 > otherRules :: [Rule]
 > otherRules =
->   [ rule "MulTo0L"  [ Num 1 <== a, a :* b === b ] (b === Num 0) ]
+>   [ rule "AddComm"  [ a :+ b === c ] (b :+ a === c)
+>   , rule "MulComm"  [ a :* b === c ] (b :* a === c)
+>   ]
 >
 >   where a : b : c : d : _ = map Var names
 
@@ -133,7 +154,7 @@ Concrete Rules
 
 
 > assocRules :: [Rule]
-> assocRules =
+> assocRules = concatMap specAx $
 >   [ rule "AddAssocFL"
 >       [ a :+ b === x, b :+ c === y, a :+ y === z ]
 >       (x :+ c === z)
@@ -169,6 +190,38 @@ Concrete Rules
 >   ]
 >
 >   where a : b : c : x : y : z : _ = map Var names
+
+
+
+> baseRules :: [Rule]
+> baseRules =
+>   [ rule "Add0_L" [] (a :+ Num 0 === a)
+>   ]
+>   where a : b : c : x : y : z : _ = map Var names
+
+> {-
+> cut1gt
+
+> specAx :: Rule -> [Rule]
+> specAx r =
+>   do (n, Prop op [ Var x, Var y, Var z ]) <- rAsmps r
+>      let upd (Var a) | a `elem` [ x, y, z ] = Con a
+>          upd a                              = a
+>          updP (Prop o ts)                   = Prop o (map upd ts)
+>      return Rule
+>        { rForall = rForall r \\ [ x, y, z ]
+>        , rAsmps  = [ (m,updP p) | (m,p) <- rAsmps r, m /= n ]
+>        , rConc   = updP $ rConc r
+>        , rSides  = nub $ Prop op [ Con x, Con y, Con z ] : rSides r
+>        , rProof  = \ts ps -> rProof r (map conVar [x,y,z] ++ ts)
+>                       ((n, DefAx op (Con x) (Con y)) : ps)
+>        }
+>   where conVar x                         = (x, Con x)
+> -}
+
+
+
+
 
 
 Generating Haskell
