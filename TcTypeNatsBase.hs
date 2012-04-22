@@ -124,6 +124,7 @@ data Theorem  = EqRefl      -- forall a.                        a = a
               | LeqTrans    -- forall a b c. (a <= b, b <= c) => a <= c
               | Leq0        -- forall a.                         0 <= a
 
+              -- Definitions
               | DefAdd Integer Integer
               | DefMul Integer Integer
               | DefExp Integer Integer
@@ -140,37 +141,45 @@ data Theorem  = EqRefl      -- forall a.                        a = a
               | ExpLeq1
               | ExpLeq2
 
+              -- Basic identities
               | Add0_L    -- forall a. 0 + 0 = a
               | Add0_R    -- forall a. a + 0 = a
               | Mul0_L    -- forall a. a * 0 = 0
-              | Mul1_L    -- forall a. a * 1 = a
               | Mul0_R    -- forall a. 0 * a = 0
+              | Mul1_L    -- forall a. a * 1 = a
               | Mul1_R    -- forall a. 1 * a = a
-
-              | Exp0_R    -- forall a.             a ^ 0 = 1
-              | Exp1_R    -- forall a.             a ^ 1 = a
               | Exp0_L    -- forall a. (1 <= a) => 0 ^ a = 0
+              | Exp0_R    -- forall a.             a ^ 0 = 1
               | Exp1_L    -- forall a.             1 ^ a = 1
+              | Exp1_R    -- forall a.             a ^ 1 = a
 
 
-              | AddComm | MulComm
-              | SubL | SubR | DivL | DivR | Root | Log
-              | MulGrowL | MulGrowR | ExpGrow
-              | AddAssoc | MulAssoc | AddMul | MulExp | ExpAdd | ExpMul
-              | AddAssocSym | MulAssocSym | AddMulSym
-              | MulExpSym | ExpAddSym | ExpMulSym
-              | FunAdd | FunMul | FunExp
 
-
-              -- New rules
+              -- Functional behavior
               | AddFun | SubFunL | SubFunR
               | MulFun | DivFunL | DivFunR
               | ExpFun | SqrtFun | LogFun
 
+              -- Commutativity
+              | AddComm
+              | MulComm
+
+              -- Associativity
               | AddAssocFL | AddAssocFR | AddAssocBL | AddAssocBR
               | MulAssocFL | MulAssocFR | MulAssocBL | MulAssocBR
 
-              | MulTo0L | MulTo0R
+              -- Distributivity
+              | AddMulF1 | AddMulF2 | AddMulB1 | AddMulB2L | AddMulB2R
+              | MulExpF1 | MulExpF2 | MulExpB1 | MulExpB2L | MulExpB2R
+
+              | MulExp
+
+              -- Others
+              | MulTo0L   -- forall a b. (2 <= a, a * b = b) => b = 0
+              | ExpAdd    -- 
+              | ExpMul
+
+
                 deriving Show
 
 

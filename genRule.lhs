@@ -8,7 +8,8 @@
 
 > main :: IO ()
 > main = print $ genRules allRules
->   where allRules = funRules ++ anihRules ++ otherRules ++ assocRules
+>   where allRules = funRules ++ anihRules ++ otherRules ++
+>                    assocRules ++ distrRules
 
 > names :: [String]
 > names = concatMap block [ 0 :: Integer .. ]
@@ -180,6 +181,62 @@ Instantiate Fun* with basic axioms:
 >         spec r = r : specAx r
 
 
+> distrRules :: [Rule]
+> distrRules = concatMap spec $
+>   [ rule "AddMulF1"
+>       [ a :+ b === x, a :* c === y1, b :* c === y2, x :* c === z ]
+>       (y1 :+ y2 === z)
+>
+>   , rule "AddMulF2"
+>       [ a :+ b === x, a :* c === y1, b :* c === y2, y1 :+ y2 === z ]
+>       (x :* c === z)
+>
+>   , rule "AddMulB1"
+>       [ Num 1 <== c, a :* c === y1, b :* c === y2
+>       , y1 :+ y2 === z, x :* c === z ]
+>       (a :+ b === x)
+>
+>   , rule "AddMulB2L"
+>       [ b :* c === y2, a :+ b === x, y1 :+ y2 === z, x :* c === z ]
+>       (a :* c === y1)
+>
+>   , rule "AddMulB2R"
+>       [ a :* c === y1, a :+ b === x, y1 :+ y2 === z, x :* c === z ]
+>       (b :* c === y2)
+>   ]
+>   ++
+>   -- (a * b) ^ c = z ==> a^c * b^c = z
+>   [ rule "MulExpF1"
+>       [ a :* b === x, a :^ c === y1, b :^ c === y2, x :^ c === z ]
+>       (y1 :* y2 === z)
+>
+>   -- a^c * b^c = z  ==>  (a * b) ^ c = z
+>   , rule "MulExpF2"
+>       [ a :* b === x, a :^ c === y1, b :^ c === y2, y1 :* y2 === z ]
+>       (x :^ c === z)
+>
+>   -- a^c * b^c = x ^ c ==> a * b = c
+>   , rule "MulExpB1"
+>       [ Num 1 <== c, a :^ c === y1, b :^ c === y2
+>       , y1 :* y2 === z, x :^ c === z ]
+>       (a :* b === x)
+>
+>   -- y1 * b^c = (a * b) ^ c ==> a ^ c = y1
+>   , rule "MulExpB2L"
+>       [ Num 1 <== b, b :^ c === y2, a :* b === x
+>       , y1 :* y2 === z, x :^ c === z ]
+>       (a :^ c === y1)
+>
+>   -- a^c * y2 c = (a * b) ^ c ==> b ^ c = y2
+>   , rule "MulExpB2R"
+>       [ Num 1 <== a, a :^ c === y1, a :* b === x
+>       , y1 :* y2 === z, x :^ c === z ]
+>       (b :^ c === y2)
+>   ]
+
+>   where a : b : c : x : y1 : y2 : z : _ = map Var names
+>         spec r = r : specAx r
+
 
 Generating New Rules By Instantiation
 =====================================
@@ -279,6 +336,8 @@ a' + b' = c'
 >                brackets (pp c <+> text lOp <+> pp b)
 >   | isGoal b = text "Just" <+> pp b <+> text "<-" <+>
 >                brackets (pp c <+> text rOp <+> pp a)
+>   | all (`elem` asmp_vars) [a,b,c] = text "guard" <+>
+>               parens (pp a <+> text fOp <+> pp b <+> text "==" <+> pp c)
 >   where
 >   conc_vars         = pTerms (rConc r)
 >   asmp_vars         = [ x | (_, Prop op1 ts) <- rAsmps r
