@@ -4,8 +4,8 @@ module TcTypeNatsStandAlone
   , pprVar, pprEvVar
   , TCN
   , newEvVar
-  ,impossibleGoal
-  ,impossibleFact
+  , impossibleGoal
+  , impossibleFact
 
   , runTCN      -- only in standalone mode
   , strVar

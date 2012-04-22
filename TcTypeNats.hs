@@ -43,14 +43,14 @@ instance PP Inerts where
 data InsertInert = InsertInert
   { solvedGoals  :: [(EvVar,Proof)]   -- ^ Goals that were proved.
   , newGoals     :: [Goal]            -- ^ New goals that need proof.
-  , newFacts     :: Props Fact        -- ^ New facts that need proof.
+  , newFacts     :: [Fact]            -- ^ New equalities that we learned.
   , newInerts    :: Inerts            -- ^ The new inert set.
   }
 
 noChanges :: Inerts -> InsertInert
-noChanges is = InsertInert { solvedGoals = []
+noChanges is = InsertInert { solvedGoals  = []
                            , newGoals     = []
-                           , newFacts     = Props.empty
+                           , newFacts     = []
                            , newInerts    = is
                            }
 
@@ -67,7 +67,7 @@ insertFact g props =
   case addFact g (facts props) of
     Inconsistent  -> impossibleFact
     AlreadyKnown  -> return (noChanges props)
-    Improved f    -> return (noChanges props) { newFacts = Props.singleton f }
+    Improved f    -> insertFact f props
 
     -- XXX: Should export equalities, in case ither solvers are interested
     Added new newProps ->
@@ -75,12 +75,16 @@ insertFact g props =
         Nothing -> impossibleFact
         Just fs -> return
           InsertInert { newGoals     = Props.toList (goals props)
-                      , newFacts     = Props.empty
+                      , newFacts     = newEqs
                       , solvedGoals  = []
                       , newInerts    = Inerts { facts  = fs
                                               , goals  = Props.empty
                                               }
                       }
+            where eqs    = Subst.toFacts . getEqFacts
+                  newEqs = Prelude.filter (`notElem` eqs (facts props)) (eqs fs)
+
+
 
 
 
@@ -178,7 +182,7 @@ insertGoal w props =
           YesIf ps proof -> return InsertInert
             { solvedGoals = [ (goalName w, proof) ]
             , newGoals    = ps
-            , newFacts    = Props.empty
+            , newFacts    = []
             , newInerts   = props
             }
 
@@ -190,8 +194,8 @@ insertGoal w props =
 
                    return InsertInert
                      { solvedGoals = solved
-                     , newGoals     = new
-                     , newFacts     = Props.empty
+                     , newGoals    = new
+                     , newFacts    = []
                      , newInerts =
                         props { goals = Props.insert w
                                         (Props.filter keepGoal (goals props)) }

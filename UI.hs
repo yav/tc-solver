@@ -86,7 +86,7 @@ initS = S { entered = M.empty, inertSet = Just initSolverS }
 addWorkItemsUI :: (Int,[WorkItem]) -> SolverS -> Maybe SolverS
 addWorkItemsUI (n,ws) is = addWorkItems is1 ('w' : show n) (length ws + 1)
   where is1 = is { ssTodoGoals = [ w | Wanted w <- ws ]
-                 , ssTodoFacts = Props.fromList [ g | Given g  <- ws ]
+                 , ssTodoFacts = [ g | Given g  <- ws ]
                  }
 
 addWorkItems :: SolverS -> String -> Int -> Maybe SolverS
@@ -294,7 +294,7 @@ readMb' f x = case f x of
 --------------------------------------------------------------------------------
 
 data SolverS = SolverS
-  { ssTodoFacts :: Props Fact
+  { ssTodoFacts :: [Fact]
   , ssTodoGoals :: [Goal]
   , ssSolved    :: [(EvVar,Proof)]
   , ssInerts    :: Inerts
@@ -304,7 +304,7 @@ data SolverS = SolverS
 initSolverS :: SolverS
 initSolverS = SolverS
   { ssTodoGoals = []
-  , ssTodoFacts = Props.empty
+  , ssTodoFacts = []
   , ssSolved    = []
   , ssInerts    = noInerts
   }
@@ -348,9 +348,9 @@ is being cancelled is greater than 0.
 -}
 
 getFact :: SolverS -> Maybe (Fact, SolverS)
-getFact s = case getOne (ssTodoFacts s) of
-              Nothing     -> Nothing
-              Just (f,fs) -> Just (f, s { ssTodoFacts = fs })
+getFact s = case ssTodoFacts s of
+              []      -> Nothing
+              f : fs  -> Just (f, s { ssTodoFacts = fs })
 
 getGoal :: SolverS -> Maybe (Goal, SolverS)
 getGoal s = case ssTodoGoals s of
@@ -359,7 +359,7 @@ getGoal s = case ssTodoGoals s of
 
 nextState :: InsertInert -> SolverS -> SolverS
 nextState r s =
-  SolverS { ssTodoFacts = Props.union (newFacts r) (ssTodoFacts s)
+  SolverS { ssTodoFacts = newFacts r ++ ssTodoFacts s
           , ssTodoGoals = newGoals r ++ ssTodoGoals s
           , ssInerts    = newInerts r
           , ssSolved    = solvedGoals r ++ ssSolved s
