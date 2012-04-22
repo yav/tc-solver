@@ -330,14 +330,15 @@ a' + b' = c'
 
 > genSide :: Rule -> Prop -> Doc
 > genSide r (Prop op [ a, b, c ])
+>   | all (`elem` asmp_vars) [a,b,c] = text "guard" <+>
+>               parens (pp a <+> text fOp <+> pp b <+> text "==" <+> pp c)
+>
 >   | isGoal c = text "let" <+> pp c <+> text "=" <+>
 >                pp a <+> text fOp <+> pp b
 >   | isGoal a = text "Just" <+> pp a <+> text "<-" <+>
 >                brackets (pp c <+> text lOp <+> pp b)
 >   | isGoal b = text "Just" <+> pp b <+> text "<-" <+>
 >                brackets (pp c <+> text rOp <+> pp a)
->   | all (`elem` asmp_vars) [a,b,c] = text "guard" <+>
->               parens (pp a <+> text fOp <+> pp b <+> text "==" <+> pp c)
 >   where
 >   conc_vars         = pTerms (rConc r)
 >   asmp_vars         = [ x | (_, Prop op1 ts) <- rAsmps r
@@ -478,9 +479,11 @@ do (pB, a, b, c) <- lookupProof facts Mul
 >     | otherwise       = ((x : used, eqs), Var x)
 >
 >   renameTerm (used,eqs) (Con x)
->     | conName x `elem` used   = let y = newName x used
->                                 in ( (y:used, (x,y):eqs), Con y )
->     | otherwise       = ((x : used, eqs) , Con x)
+>     | x' `elem` used   = let y = newName x used
+>                              y' = conName y
+>                          in ( (y' : used, (x',y') : eqs), Con y )
+>     | otherwise       = ((x' : used, eqs) , Con x)
+>       where x' = conName x
 >
 >   renameTerm s t = (s, t)
 
