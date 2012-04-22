@@ -141,7 +141,7 @@ Instantiate Fun* with basic axioms:
 
 
 > assocRules :: [Rule]
-> assocRules = concatMap specAx $
+> assocRules = concatMap spec $
 >   [ rule "AddAssocFL"
 >       [ a :+ b === x, b :+ c === y, a :+ y === z ]
 >       (x :+ c === z)
@@ -177,6 +177,7 @@ Instantiate Fun* with basic axioms:
 >   ]
 >
 >   where a : b : c : x : y : z : _ = map Var names
+>         spec r = r : specAx r
 
 
 
