@@ -35,7 +35,6 @@ import TcTypeNatsStandAlone
 import Text.PrettyPrint
 import Data.List(zipWith5)
 
-newtype Var = V Xi
 
 {- The ordering model (TcTypeNatsLeq) makes assumptions about the
    ordering on terms:
@@ -276,12 +275,6 @@ proofLet x p1 (Using t ts ps) = Using t ts (map (proofLet x p1) ps)
 
 -- Comparisons -----------------------------------------------------------------
 
-instance Eq Var where
-  V x == V y  = eqType x y
-
-instance Ord Var where
-  compare (V x) (V y) = cmpType x y
-
 instance Eq Term where
   Var x == Var y = x == y
   Num x == Num y = x == y
@@ -311,7 +304,7 @@ class PP a where
   pp :: a -> Doc
 
 instance PP Var where
-  pp (V x) = pprXi x
+  pp v = pprVar v
 
 instance PP Term where
   pp (Var x)  = pp x

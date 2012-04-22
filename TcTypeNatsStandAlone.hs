@@ -1,42 +1,35 @@
 {- | Definitions of basic types for standalone testing. -}
 module TcTypeNatsStandAlone
-  ( Xi, eqType, cmpType
-  , EvVar
-  , pprXi, pprEvVar
+  ( Var, EvVar
+  , pprVar, pprEvVar
   , TCN
   , newEvVar
 
   , runTCN      -- only in standalone mode
-  , strXi
+  , strVar
   , strEvVar
   ) where
 
 import Text.PrettyPrint
 import Control.Monad(MonadPlus(..))
 
-newtype Xi    = Xi String
+newtype Var   = V String
+                deriving (Eq,Ord)
 
 newtype EvVar = EvVar String
                 deriving (Eq,Ord)
 
-
 -- only standalone
-strXi :: String -> Xi
-strXi = Xi
+strVar :: String -> Var
+strVar = V
 
 -- only standalone
 strEvVar :: String -> EvVar
 strEvVar x = EvVar x
 
-eqType :: Xi -> Xi -> Bool
-eqType (Xi x) (Xi y) = x == y
-
-cmpType :: Xi -> Xi -> Ordering
-cmpType (Xi x) (Xi y) = compare x y
-
 -- ???
-pprXi  :: Xi -> Doc
-pprXi (Xi x) = text x
+pprVar :: Var -> Doc
+pprVar (V x) = text x
 
 pprEvVar :: EvVar -> Doc
 pprEvVar (EvVar x) = text x

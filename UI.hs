@@ -251,7 +251,7 @@ pAtom pref n =
             return (Num x, n, [])
        , do a <- satisfy (\x -> isAlpha x || x == '_')
             as <- munch (\x -> isAlphaNum x || x == '_')
-            return (Var $ V $ strXi $ a:as, n, [])
+            return (Var $ strVar $ a:as, n, [])
        , do (t1,op,t2,n',es) <- between (tchar '(') (tchar ')') (pTerm pref n)
             let x = Var (newVar pref n')
             return (x, n'+1, Prop op [t1,t2,x] : es)
@@ -269,7 +269,7 @@ pOp = msum [ tchar '+' >> return Add
            ]
 
 newVar :: Int -> Int -> Var
-newVar pref n = V $ strXi $ (vars !! n) ++ "_" ++ show pref
+newVar pref n = strVar $ (vars !! n) ++ "_" ++ show pref
   where vars      = concatMap chunk [ 0 :: Integer .. ]
         toVar c a = if a == 0 then [c] else c : show a
         chunk n1  = map (`toVar` n1) [ 'a' .. 'z' ]
