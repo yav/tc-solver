@@ -1,6 +1,6 @@
 {- Terms and Propositions -}
 module TcTypeNatsBase
-  ( Var(..)
+  ( Var
   , Term(..)
   , num
   , Pred(..)
