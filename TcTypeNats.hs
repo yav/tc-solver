@@ -25,7 +25,7 @@ import Debug.Trace
 import Text.PrettyPrint
 import Data.Maybe(fromMaybe,isNothing)
 import Data.List(find)
-import Control.Monad(MonadPlus(..),msum)
+import Control.Monad(msum)
 
 -- | An colection of a facts and goals that cannot interact with each other.
 data Inerts = Inerts { facts :: Facts, goals :: Props Goal }
@@ -65,14 +65,14 @@ new fact. -}
 insertFact  :: Fact -> Inerts -> TCN InsertInert
 insertFact g props =
   case addFact g (facts props) of
-    Inconsistent  -> mzero
+    Inconsistent  -> impossibleFact
     AlreadyKnown  -> return (noChanges props)
     Improved f    -> return (noChanges props) { newFacts = Props.singleton f }
 
     -- XXX: Should export equalities, in case ither solvers are interested
     Added new newProps ->
       case addFactsTrans newProps new of
-        Nothing -> mzero
+        Nothing -> impossibleFact
         Just fs -> return
           InsertInert { newGoals     = Props.toList (goals props)
                       , newFacts     = Props.empty
@@ -81,7 +81,7 @@ insertFact g props =
                                               , goals  = Props.empty
                                               }
                       }
-    
+
 
 
 {-| Try to extend a collection of already known facts.
@@ -119,8 +119,8 @@ addFact f fs
 
 -- Using Existing Goals --------------------------------------------------------
 
-assumeGoals :: MonadPlus m => [Goal] -> Facts -> m Facts
-assumeGoals as bs = maybe mzero return
+assumeGoals :: [Goal] -> Facts -> TCN Facts
+assumeGoals as bs = maybe impossibleGoal return
                   $ addFactsTrans bs
                   $ Props.fromList
                   $ map goalToFact as
@@ -154,7 +154,7 @@ addFactsTrans fs0 todo = withFacts todo fs0 [] [] ([],[])
 
   add1 f fs eqs leqs others =
     case addFact f fs of
-      Inconsistent   -> mzero
+      Inconsistent   -> Nothing
       AlreadyKnown   -> loop fs eqs leqs others
       Improved f1    -> add1 f1 fs eqs leqs others
       Added work fs1 -> withFacts work fs1 eqs leqs others
@@ -173,7 +173,7 @@ insertGoal w props =
         res <- entails asmps w
         case res of
 
-          NotForAny -> mzero
+          NotForAny -> impossibleGoal
 
           YesIf ps proof -> return InsertInert
             { solvedGoals = [ (goalName w, proof) ]
@@ -222,7 +222,7 @@ four pieces of state:
         do asmps1 <- assumeGoals ws1 asmps
            res <- entails asmps1 w1
            case res of
-             NotForAny -> mzero
+             NotForAny -> impossibleGoal
              NotForAll ->
                do asmps2 <- assumeGoals [w1] asmps
                   checkExisting solved new asmps2 ws1
@@ -291,22 +291,14 @@ entails ps p =
          | improvable ->    -- Is there room for improvement?
 
          -- See note bellow for an explanation on what's going on here.
-         case assumeGoals [p] ps of
-
-           -- The new goal contradicts the given assumptions.
-           Nothing -> return NotForAny
-
-           -- New facts!  We consider only the equalities.
-           Just new ->
-             do let su1 = getEqFacts new
-                eqns <- mapM newGoal $ map factProp $ Subst.toFacts su1
-                case assumeGoals eqns ps of
-                  Nothing  -> return NotForAny
-                  Just ps1 ->
-                    do ans <- entailsSimple ps1 p
-                       case ans of
-                         YesIf qs proof -> return (YesIf (eqns ++ qs) proof)
-                         _              -> return ans
+         do new <- assumeGoals [p] ps
+            let su1 = getEqFacts new
+            eqns <- mapM newGoal $ map factProp $ Subst.toFacts su1
+            ps1 <- assumeGoals eqns ps
+            ans <- entailsSimple ps1 p
+            case ans of
+              YesIf qs proof -> return (YesIf (eqns ++ qs) proof)
+              _              -> return ans
 
        _ -> return attempt1
 

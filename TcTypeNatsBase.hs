@@ -29,6 +29,8 @@ module TcTypeNatsBase
   , TCN
   , EvVar
   , newEvVar
+  , impossibleFact
+  , impossibleGoal
   ) where
 
 import TcTypeNatsStandAlone
