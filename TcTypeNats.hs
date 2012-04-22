@@ -138,7 +138,7 @@ Furthermore, improvements "restart" so we do less work if we do equalities
 first. -}
 
 addFactsTrans :: Facts -> Props Fact -> Maybe Facts
-addFactsTrans fs todo = withFacts todo fs [] [] ([],[])
+addFactsTrans fs0 todo = withFacts todo fs0 [] [] ([],[])
   where
   withFacts work fs eqs leqs (hd,tl) =
     loop fs (Props.getPropsFor Eq work ++ eqs)
